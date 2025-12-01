@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { SectionName, PerformanceStatus, KPIRecord } from '../types';
 import { dataService } from '../services/dataService';
-import { Medal, ShieldCheck, AlertTriangle, Siren, Calendar, ArrowLeft, TrendingUp, TrendingDown, ChevronsRight, HelpCircle } from 'lucide-react';
+import { Medal, ShieldCheck, AlertTriangle, Siren, Calendar, ArrowLeft, TrendingUp, TrendingDown, ChevronsRight, CircleQuestionMark } from 'lucide-react';
 
 interface LocalSectionPerformance {
   section: string;
