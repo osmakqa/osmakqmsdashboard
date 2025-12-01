@@ -1,0 +1,5 @@
+{
+  "name": "KPI Dashboard sheet",
+  "description": "A comprehensive dashboard for tracking Key Performance Indicators across various hospital sections, featuring trend analysis, performer categorization, and submission tracking.",
+  "requestFramePermissions": []
+}
