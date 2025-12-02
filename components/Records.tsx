@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { KPIRecord, SectionName, KPIType, KPIDefinition } from '../types';
 import { dataService } from '../services/dataService';
-import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy } from 'lucide-react';
+import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet } from 'lucide-react';
 import LoginModal from './LoginModal';
+import { GOOGLE_SHEET_URL } from '../constants';
 
 interface RecordsProps {
   records: KPIRecord[];
@@ -48,7 +49,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   // Auth state
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [pendingAction, setPendingAction] = useState<'add' | 'edit' | 'delete' | null>(null);
+  const [pendingAction, setPendingAction] = useState<'add' | 'edit' | 'delete' | 'openSheet' | null>(null);
   const [pendingRecordId, setPendingRecordId] = useState<string | null>(null);
 
   // Add/Edit Entry Modal State
@@ -258,10 +259,21 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
           }
       } else if (pendingAction === 'delete' && pendingRecordId) {
           onDeleteClick(pendingRecordId);
+      } else if (pendingAction === 'openSheet') {
+        window.open(GOOGLE_SHEET_URL, '_blank');
       }
 
       setPendingAction(null);
       setPendingRecordId(null);
+  };
+  
+  const handleOpenSheetClick = () => {
+    if (!isAuthenticated) {
+      setPendingAction('openSheet');
+      setIsLoginOpen(true);
+    } else {
+      window.open(GOOGLE_SHEET_URL, '_blank');
+    }
   };
 
   // --- Spreadsheet Logic ---
@@ -439,6 +451,10 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
         </div>
 
         <div className="flex gap-2">
+           <button onClick={handleOpenSheetClick} className="flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-md text-sm hover:bg-green-200 transition-colors whitespace-nowrap">
+            <Sheet className="w-4 h-4" />
+            Open Sheet
+          </button>
           <button disabled={loading} onClick={onAddClick} className="flex items-center gap-2 bg-osmak-600 text-white px-4 py-2 rounded-md text-sm hover:bg-osmak-700 transition-colors disabled:opacity-50 whitespace-nowrap">
             <Plus className="w-4 h-4" />
             Add Entry

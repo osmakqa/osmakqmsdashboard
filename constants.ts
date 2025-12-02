@@ -6,6 +6,9 @@ export const APP_NAME = "Ospital ng Makati KPI Dashboard";
 // Updated Logo URL
 export const LOGO_URL = "https://maxterrenal-hash.github.io/justculture/osmak-logo.png";
 
+// Direct link to the Google Sheet for easy access
+export const GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1z62O4Pd3iiToOkFKBDy168V-A4vi6tnYDki6Ylj4yGE/edit";
+
 // Specific Data Lists
 export const KPI_NAMES = [
   "12L ECG", "ACM Mammography", "Admission", "Ambulatory Surgery", "Building Facilities", "CT-scan", "CTC", 
