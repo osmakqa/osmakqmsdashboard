@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { SectionName, PerformanceStatus, KPIRecord } from '../types';
 import { dataService } from '../services/dataService';
-import { Medal, ShieldCheck, AlertTriangle, Siren, Calendar, ArrowLeft, TrendingUp, TrendingDown, ChevronsRight, CircleHelp } from 'lucide-react';
+import { Medal, ShieldCheck, AlertTriangle, Siren, Calendar, ArrowLeft, TrendingUp, TrendingDown, ChevronsRight, HelpCircle } from 'lucide-react';
 
 interface LocalSectionPerformance {
   section: string;
@@ -197,7 +197,7 @@ const TopPerformers: React.FC<TopPerformersProps> = ({ records }) => {
       case PerformanceStatus.STABLE: return <ShieldCheck className="w-6 h-6 text-green-500" />;
       case PerformanceStatus.NEEDS_IMPROVEMENT: return <AlertTriangle className="w-6 h-6 text-orange-500" />;
       case PerformanceStatus.CRITICAL: return <Siren className="w-6 h-6 text-red-500" />;
-      default: return <CircleHelp className="w-6 h-6 text-gray-400" />;
+      default: return <HelpCircle className="w-6 h-6 text-gray-400" />;
     }
   };
 
