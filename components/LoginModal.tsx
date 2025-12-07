@@ -5,9 +5,10 @@ interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onLogin: () => void;
+  targetSection?: string; // Optional: If provided, validates against section-specific password
 }
 
-const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin }) => {
+const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin, targetSection }) => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -18,24 +19,50 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin }) => 
     e.preventDefault();
     setError('');
 
-    if (password === 'osmak123') {
+    let isValid = false;
+    const masterKey = 'osmak123';
+
+    if (targetSection) {
+        // Section-specific password logic: First word of section name + "123"
+        // e.g. "Admitting Section" -> "admitting" -> "admitting123"
+        const firstWord = targetSection.split(' ')[0].toLowerCase().trim();
+        const sectionPassword = `${firstWord}123`;
+        
+        // Allow either section password OR master admin key
+        if (password === sectionPassword || password === masterKey) {
+            isValid = true;
+        }
+    } else {
+        // Fallback for global actions (require master key)
+        if (password === masterKey) {
+            isValid = true;
+        }
+    }
+
+    if (isValid) {
         onLogin();
         setPassword('');
     } else {
-        setError("Invalid password. Please enter 'osmak123'");
+        // Provide hint only for usability in this specific internal app context
+        const hint = targetSection 
+            ? `Password for ${targetSection} (e.g., '${targetSection.split(' ')[0].toLowerCase()}123') or Admin Key.`
+            : "Invalid password. Please enter 'osmak123'";
+        setError(hint);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-96 shadow-xl transform transition-all">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
+      <div className="bg-white rounded-lg p-6 w-96 shadow-xl transform transition-all animate-fade-in">
         <div className="text-center mb-6">
           <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-osmak-100 mb-4">
             <Lock className="h-6 w-6 text-osmak-600" />
           </div>
-          <h3 className="text-lg font-medium text-gray-900">Admin Access</h3>
+          <h3 className="text-lg font-bold text-gray-900">
+            {targetSection ? 'Section Access' : 'Admin Access'}
+          </h3>
           <p className="text-sm text-gray-500 mt-2">
-            Enter password to continue
+            {targetSection ? `Enter password for ${targetSection}` : 'Enter admin password to continue'}
           </p>
         </div>
 
@@ -80,7 +107,7 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin }) => 
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-sm text-white bg-osmak-600 hover:bg-osmak-700 rounded-md"
+              className="px-4 py-2 text-sm text-white bg-osmak-600 hover:bg-osmak-700 rounded-md font-medium"
             >
               Login
             </button>

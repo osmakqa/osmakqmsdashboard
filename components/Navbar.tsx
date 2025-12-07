@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Trophy, Database, AlertCircle, Menu, X, FileText } from 'lucide-react';
+import { LayoutDashboard, Trophy, Database, AlertCircle, Menu, X, FileText, ClipboardList } from 'lucide-react';
 import { useState } from 'react';
 import { LOGO_URL } from '../constants';
 
@@ -16,31 +16,30 @@ const Navbar: React.FC<NavbarProps> = ({ currentView, setView }) => {
     { id: 'performers', label: 'Top Performers', icon: <Trophy className="w-5 h-5" /> },
     { id: 'records', label: 'Records', icon: <Database className="w-5 h-5" /> },
     { id: 'nonsub', label: 'Non-Submission', icon: <AlertCircle className="w-5 h-5" /> },
+    { id: 'reports', label: 'Reports', icon: <ClipboardList className="w-5 h-5" /> },
     { id: 'kpi_definitions', label: 'KPI', icon: <FileText className="w-5 h-5" /> },
   ];
 
   return (
     <>
-      <header className="sticky top-0 z-50 flex items-center justify-between gap-4 bg-osmak-700 text-white px-4 py-3 shadow-[0_2px_6px_rgba(0,0,0,0.15)]">
-        {/* Branding Section */}
-        <div className="flex items-center gap-4">
-          <img 
+      <header className="sticky top-0 z-50 flex items-center gap-4 bg-osmak-700 text-white px-4 py-3 shadow-[0_2px_6px_rgba(0,0,0,0.15)]">
+        <img 
             src={LOGO_URL} 
             alt="OsMak Logo" 
             className="h-12 w-auto object-contain"
-          />
-          <div className="flex flex-col">
+        />
+        
+        <div className="flex flex-col flex-1">
             <h1 className="m-0 text-[1.05rem] tracking-wider uppercase font-bold leading-tight">
-              OSPITAL NG MAKATI
+            OSPITAL NG MAKATI
             </h1>
             <span className="text-[0.8rem] opacity-90 leading-tight">
-              KPI Dashboard
+            KPI Dashboard
             </span>
-          </div>
         </div>
 
         {/* Desktop Menu */}
-        <div className="hidden lg:block">
+        <div className="hidden lg:block ml-auto">
           <div className="flex items-center space-x-2">
             {navItems.map((item) => (
               <button

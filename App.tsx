@@ -1,9 +1,11 @@
+
 import React, { useState, useEffect } from 'react';
 import Navbar from './components/Navbar';
 import KPITrend from './components/KPITrend';
 import TopPerformers from './components/TopPerformers';
 import Records from './components/Records';
 import NonSubmission from './components/NonSubmission';
+import Reports from './components/Reports';
 import KPIDetails from './components/KPIDetails';
 import { KPIRecord, KPIDefinition } from './types';
 import { dataService } from './services/dataService';
@@ -62,6 +64,8 @@ const App: React.FC = () => {
         return <Records records={records} definitions={definitions} onRefresh={refreshData} />;
       case 'nonsub':
         return <NonSubmission records={records} />;
+      case 'reports':
+        return <Reports records={records} definitions={definitions} />;
       case 'kpi_definitions':
         return <KPIDetails definitions={definitions} />;
       default:

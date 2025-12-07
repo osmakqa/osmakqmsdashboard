@@ -1,8 +1,7 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { KPIRecord, SectionName, KPIType, KPIDefinition } from '../types';
 import { dataService } from '../services/dataService';
-import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet, Calendar, Target, CheckCircle, AlertTriangle, Eraser, PenTool } from 'lucide-react';
+import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet, Calendar, Target, CheckCircle, AlertTriangle, Eraser, PenTool, Lock } from 'lucide-react';
 import LoginModal from './LoginModal';
 import { GOOGLE_SHEET_URL } from '../constants';
 
@@ -11,50 +10,6 @@ interface RecordsProps {
   definitions: KPIDefinition[];
   onRefresh: () => void;
 }
-
-// Helper to parse target strings like "95%" or "< 30 Mins"
-const parseKPITarget = (targetString: string): Partial<KPIRecord> => {
-  const result: Partial<KPIRecord> = { kpiType: 'PERCENTAGE', targetPct: 0 };
-  
-  // Dual parsing logic
-  const pctMatch = targetString.match(/([\d.]+)%/);
-  const timeMatch = targetString.match(/([\d.]+)\s*(min|hour|day)/i);
-  
-  if (pctMatch) {
-    result.kpiType = 'PERCENTAGE';
-    result.targetPct = parseFloat(pctMatch[1]);
-  }
-  
-  if (timeMatch) {
-    if (!result.kpiType || !pctMatch) result.kpiType = 'TIME'; // Default to TIME if no % found, or both found
-    result.targetTime = parseFloat(timeMatch[1]);
-    const unitStr = timeMatch[2].toLowerCase();
-    if (unitStr.includes('min')) result.timeUnit = 'Mins';
-    else if (unitStr.includes('hour')) result.timeUnit = 'Hours';
-    else if (unitStr.includes('day')) result.timeUnit = 'Days';
-  } else if (!pctMatch) {
-     // Fallback if generic number
-     const numMatch = targetString.match(/[\d.]+/);
-     if (numMatch) {
-         if (targetString.toLowerCase().includes('day')) {
-             result.kpiType = 'TIME';
-             result.targetTime = parseFloat(numMatch[0]);
-             result.timeUnit = 'Days';
-         } else if (targetString.toLowerCase().includes('min')) {
-            result.kpiType = 'TIME';
-            result.targetTime = parseFloat(numMatch[0]);
-            result.timeUnit = 'Mins';
-         } else {
-             // Default assume percentage if unclear
-             result.kpiType = 'PERCENTAGE';
-             result.targetPct = parseFloat(numMatch[0]);
-         }
-     }
-  }
-
-  return result;
-};
-
 
 const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) => {
   
@@ -72,6 +27,10 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [pendingAction, setPendingAction] = useState<'add' | 'edit' | 'delete' | 'openSheet' | null>(null);
   const [pendingRecordId, setPendingRecordId] = useState<string | null>(null);
+  
+  // NEW: Section Selector State (Before Login)
+  const [isSectionSelectorOpen, setIsSectionSelectorOpen] = useState(false);
+  const [targetSectionForLogin, setTargetSectionForLogin] = useState<string | undefined>(undefined);
 
   // Add/Edit Entry Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -167,33 +126,28 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       };
       
       if (def) {
-          // Priority: Check specific columns first (targetTime, targetPct)
-          const hasTime = def.targetTime !== undefined && def.targetTime !== null;
-          const hasPct = def.targetPct !== undefined && def.targetPct !== null;
-
-          if (hasTime || hasPct) {
-              if (hasPct) update.targetPct = def.targetPct;
-              if (hasTime) {
-                  update.targetTime = def.targetTime;
-                  update.timeUnit = def.timeUnit || 'Mins';
-              }
-              
-              // Infer Type based on what is present
-              if (hasTime && hasPct) {
-                   // Dual metric, default to TIME but UI will show both
-                   update.kpiType = 'TIME'; 
-              } else if (hasTime) {
-                   update.kpiType = 'TIME';
-              } else {
-                   update.kpiType = 'PERCENTAGE';
-              }
-
-          } else if (def.target) {
-             // Fallback: Parse Target string if specific columns empty
-             update = { ...update, ...parseKPITarget(def.target) };
+          // Priority: Map DIRECTLY from definition columns
+          if (def.targetPct !== undefined && def.targetPct !== null) {
+              update.targetPct = def.targetPct;
+          }
+          if (def.targetTime !== undefined && def.targetTime !== null) {
+              update.targetTime = def.targetTime;
+              update.timeUnit = def.timeUnit || 'Mins';
           }
 
-          // ** NEW: Auto-fill Department & KPI Type from Definition if available **
+          // Infer Type based on presence of targets
+          const hasTime = update.targetTime !== undefined;
+          const hasPct = update.targetPct !== undefined;
+          
+          if (hasTime && hasPct) {
+               update.kpiType = 'TIME'; // Default logical type, but UI shows both
+          } else if (hasTime) {
+               update.kpiType = 'TIME';
+          } else {
+               update.kpiType = 'PERCENTAGE';
+          }
+
+          // Auto-fill Department & KPI Type from Definition if available
           if (def.department) {
               update.department = def.department;
           }
@@ -245,8 +199,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
     if (isModalOpen && !isEditMode) {
         setBatchQueue([]);
         resetLineItem();
-        // Default to filtered section if available
-        if (filterSection) setSelectedAddSection(filterSection);
+        // Section is already set via the pre-login selector
     }
   }, [isModalOpen, isEditMode]);
 
@@ -332,7 +285,9 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   const onAddClick = () => {
     if (!isAuthenticated) {
       setPendingAction('add');
-      setIsLoginOpen(true);
+      // Instead of going straight to login, ask for Section first
+      // This enables section-specific password validation
+      setIsSectionSelectorOpen(true);
     } else {
       setIsEditMode(false);
       setIsModalOpen(true);
@@ -343,6 +298,8 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
     if (!isAuthenticated) {
         setPendingAction('edit');
         setPendingRecordId(record.id);
+        // We know the section from the record
+        setTargetSectionForLogin(record.section);
         setIsLoginOpen(true);
       } else {
         setIsEditMode(true);
@@ -354,9 +311,11 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   };
 
   const onDeleteClick = async (id: string) => {
+    const record = records.find(r => r.id === id);
     if (!isAuthenticated) {
         setPendingAction('delete');
         setPendingRecordId(id);
+        if (record) setTargetSectionForLogin(record.section);
         setIsLoginOpen(true);
     } else {
         if (window.confirm("Are you sure you want to delete this record?")) {
@@ -371,6 +330,14 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
             }
         }
     }
+  };
+
+  const handleSectionSelectionNext = () => {
+    // User picked a section in the intermediate modal
+    // Now open login, passing this section as the target
+    setTargetSectionForLogin(selectedAddSection);
+    setIsSectionSelectorOpen(false);
+    setIsLoginOpen(true);
   };
 
   const handleLoginSuccess = async () => {
@@ -396,11 +363,15 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
 
       setPendingAction(null);
       setPendingRecordId(null);
+      // Keep targetSectionForLogin? Or clear it? 
+      // Clearing it might be safer for subsequent mixed actions
+      setTargetSectionForLogin(undefined);
   };
   
   const handleOpenSheetClick = () => {
     if (!isAuthenticated) {
       setPendingAction('openSheet');
+      setTargetSectionForLogin(undefined); // Sheet requires admin master key, no specific section
       setIsLoginOpen(true);
     } else {
       window.open(GOOGLE_SHEET_URL, '_blank');
@@ -480,7 +451,12 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
 
       setLoading(true);
       try {
-        const promises = batchQueue.map(record => dataService.addRecord(record));
+        const promises = batchQueue.map(record => {
+            // Exclude kpiType from payload so it doesn't overwrite the sheet column
+            // We use 'as any' to bypass the type check for the missing property in the internal service call
+            const { kpiType, ...payload } = record;
+            return dataService.addRecord(payload as any);
+        });
         await Promise.all(promises);
         
         setTimeout(() => {
@@ -505,8 +481,12 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
             const updatedRecord = {
                 ...currentLineItem,
                 month: `${currentLineItem.month}-01` // Ensure correct format
-            };
-            await dataService.updateRecord(updatedRecord as KPIRecord);
+            } as KPIRecord;
+            
+            // Exclude kpiType from payload
+            const { kpiType, ...payload } = updatedRecord;
+            
+            await dataService.updateRecord(payload as any);
             setTimeout(() => {
                 onRefresh();
                 setLoading(false);
@@ -621,7 +601,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                 <tr>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('section')}>Section {renderSortIcon('section')}</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('kpiName')}>KPI {renderSortIcon('kpiName')}</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('department')}>Type/Dept {renderSortIcon('department')}</th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('department')}>Department {renderSortIcon('department')}</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('measureType')}>Type {renderSortIcon('measureType')}</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Target</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actual</th>
@@ -684,7 +664,54 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
           </div>
       </div>
 
-      <LoginModal isOpen={isLoginOpen} onClose={() => setIsLoginOpen(false)} onLogin={handleLoginSuccess} />
+      <LoginModal 
+        isOpen={isLoginOpen} 
+        onClose={() => setIsLoginOpen(false)} 
+        onLogin={handleLoginSuccess} 
+        targetSection={targetSectionForLogin}
+      />
+
+      {/* SECTION SELECTOR MODAL (Pre-Login) */}
+      {isSectionSelectorOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4 backdrop-blur-sm animate-fade-in">
+             <div className="bg-white rounded-lg p-6 w-96 shadow-xl">
+                 <div className="text-center mb-6">
+                    <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-osmak-100 mb-4">
+                        <Lock className="h-6 w-6 text-osmak-600" />
+                    </div>
+                    <h3 className="text-lg font-bold text-gray-900">Select Section</h3>
+                    <p className="text-sm text-gray-500 mt-1">Please identify your section to continue.</p>
+                 </div>
+                 
+                 <div className="space-y-4">
+                     <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Section / Unit</label>
+                        <select 
+                            className="w-full border-gray-300 rounded-md shadow-sm focus:ring-osmak-500 focus:border-osmak-500 py-2.5 text-sm font-medium"
+                            value={selectedAddSection}
+                            onChange={(e) => setSelectedAddSection(e.target.value)}
+                        >
+                            {Object.values(SectionName).map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                     </div>
+                     <div className="flex gap-2 justify-end mt-4">
+                         <button 
+                            onClick={() => setIsSectionSelectorOpen(false)} 
+                            className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md"
+                         >
+                            Cancel
+                         </button>
+                         <button 
+                            onClick={handleSectionSelectionNext}
+                            className="px-4 py-2 text-sm text-white bg-osmak-600 hover:bg-osmak-700 rounded-md font-medium"
+                         >
+                            Next
+                         </button>
+                     </div>
+                 </div>
+             </div>
+        </div>
+      )}
 
       {/* ADD / EDIT MODAL */}
       {isModalOpen && (
@@ -716,13 +743,20 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                 {isEditMode ? (
                                     <p className="font-bold text-osmak-800">{currentLineItem.section}</p>
                                 ) : (
-                                    <select 
-                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-osmak-500 focus:border-osmak-500 py-2.5 text-sm font-medium"
-                                        value={selectedAddSection}
-                                        onChange={(e) => setSelectedAddSection(e.target.value)}
-                                    >
-                                        {Object.values(SectionName).map(s => <option key={s} value={s}>{s}</option>)}
-                                    </select>
+                                    // Locked dropdown since we selected it pre-login, but functionally it's a select
+                                    <div className="flex items-center justify-between">
+                                        <p className="font-bold text-osmak-800 text-lg">{selectedAddSection}</p>
+                                        <button 
+                                            onClick={() => {
+                                                setIsModalOpen(false);
+                                                setIsAuthenticated(false); // Logout to change section if needed
+                                                setIsSectionSelectorOpen(true);
+                                            }}
+                                            className="text-xs text-indigo-600 hover:underline"
+                                        >
+                                            Change Section
+                                        </button>
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -758,9 +792,9 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                         )}
                                     </div>
                                     
-                                    {/* Department / Type (Span 4) */}
+                                    {/* Department (Span 4) */}
                                     <div className="md:col-span-4">
-                                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Dept / Type (Optional)</label>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Department</label>
                                         <div className="relative">
                                             <input 
                                                 type="text" 
