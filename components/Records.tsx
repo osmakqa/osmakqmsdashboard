@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { KPIRecord, SectionName, KPIType, KPIDefinition } from '../types';
 import { dataService } from '../services/dataService';
-import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet, Calendar, Target, CheckCircle, AlertTriangle, Eraser } from 'lucide-react';
+import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet, Calendar, Target, CheckCircle, AlertTriangle, Eraser, PenTool } from 'lucide-react';
 import LoginModal from './LoginModal';
 import { GOOGLE_SHEET_URL } from '../constants';
 
@@ -80,7 +80,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   
   // ENTRY STATE
   const [selectedAddSection, setSelectedAddSection] = useState<string>(SectionName.ADMITTING);
-  const [selectedAddMonth, setSelectedAddMonth] = useState<string>(new Date().toISOString().slice(0, 7)); // YYYY-MM
+  // selectedAddMonth removed as global state, moved to currentLineItem
   
   // Current Line Item State
   const [currentLineItem, setCurrentLineItem] = useState<Partial<KPIRecord>>({});
@@ -138,6 +138,8 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       setCurrentLineItem({
           kpiName: '',
           department: '',
+          // Default to current month
+          month: new Date().toISOString().slice(0, 7),
           census: undefined,
           targetPct: undefined,
           actualPct: undefined,
@@ -344,7 +346,9 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
         setIsLoginOpen(true);
       } else {
         setIsEditMode(true);
-        setCurrentLineItem({...record}); // Reuse currentLineItem for edit mode state
+        // Ensure the record's month is set correctly for the input
+        const recordMonth = record.month.slice(0, 7);
+        setCurrentLineItem({...record, month: recordMonth}); 
         setIsModalOpen(true);
       }
   };
@@ -380,7 +384,8 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
           const record = records.find(r => r.id === pendingRecordId);
           if (record) {
               setIsEditMode(true);
-              setCurrentLineItem({...record});
+              const recordMonth = record.month.slice(0, 7);
+              setCurrentLineItem({...record, month: recordMonth});
               setIsModalOpen(true);
           }
       } else if (pendingAction === 'delete' && pendingRecordId) {
@@ -428,7 +433,8 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       const newRecord: KPIRecord = {
           id: `new-${Date.now()}`,
           section: selectedAddSection as SectionName,
-          month: `${selectedAddMonth}-01`,
+          // Use the line item month
+          month: `${currentLineItem.month}-01`, 
           dueDate: currentLineItem.dueDate || new Date().toISOString().slice(0, 10),
           dateSubmitted: new Date().toISOString().slice(0, 10),
           kpiName: currentLineItem.kpiName,
@@ -446,16 +452,21 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       };
 
       setBatchQueue([...batchQueue, newRecord]);
-      // Reset line item but keep the Department if user wants to add another for same dept
+      // Reset line item but keep the Department and Month if user wants to add another for same dept/month
       setCurrentLineItem(prev => ({
           ...prev,
-          // Do not clear KPI name here to allow rapid entry
-          kpiName: '', 
+          // Do not clear KPI name or Month here to allow rapid entry
+          // But clear values
           targetPct: undefined,
           actualPct: undefined,
           targetTime: undefined,
-          actualTime: undefined
+          actualTime: undefined,
+          census: undefined
       }));
+      // Re-trigger select logic to refill target values for the kept KPI
+      if (currentLineItem.kpiName) {
+          handleKPISelect(currentLineItem.kpiName);
+      }
   };
 
   const removeFromBatch = (index: number) => {
@@ -491,7 +502,11 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       if (currentLineItem.id) {
         setLoading(true);
         try {
-            await dataService.updateRecord(currentLineItem as KPIRecord);
+            const updatedRecord = {
+                ...currentLineItem,
+                month: `${currentLineItem.month}-01` // Ensure correct format
+            };
+            await dataService.updateRecord(updatedRecord as KPIRecord);
             setTimeout(() => {
                 onRefresh();
                 setLoading(false);
@@ -694,8 +709,8 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                 <div className="flex-1 overflow-auto p-6 bg-white">
                     <div className="space-y-6">
                         
-                        {/* 1. SECTION & MONTH SELECTION (Top Bar) */}
-                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* 1. SECTION SELECTION (Top Bar) */}
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                             <div>
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Section / Unit</label>
                                 {isEditMode ? (
@@ -710,146 +725,156 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                     </select>
                                 )}
                             </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Reporting Month</label>
-                                {isEditMode ? (
-                                     <p className="font-bold text-gray-800">{new Date(currentLineItem.month || '').toLocaleDateString(undefined, {month: 'long', year: 'numeric'})}</p>
-                                ) : (
-                                    <input 
-                                        type="month" 
-                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-osmak-500 focus:border-osmak-500 py-2.5 text-sm font-medium"
-                                        value={selectedAddMonth}
-                                        onChange={(e) => setSelectedAddMonth(e.target.value)}
-                                    />
-                                )}
-                            </div>
                         </div>
 
                         {/* 2. DATA ENTRY ROW */}
                         <div className="bg-white border-2 border-osmak-100 rounded-xl p-5 shadow-sm space-y-4 relative">
                             <div className="absolute -top-3 left-4 bg-white px-2 text-xs font-bold text-osmak-600 uppercase border border-osmak-100 rounded">
-                                {isEditMode ? 'Edit Details' : 'New Entry'}
+                                {isEditMode ? 'Edit Details' : 'New Entry Details'}
                             </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-4">
-                                {/* KPI Selection (Span 4) */}
-                                <div className="lg:col-span-4">
-                                    <div className="flex justify-between">
-                                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">KPI Name</label>
-                                        <button onClick={handleClearForm} className="text-[10px] text-gray-400 hover:text-osmak-600 flex items-center gap-1 mb-1" title="Reset Filters"><Eraser className="w-3 h-3"/> Clear Form</button>
+                            
+                            {/* NEW LAYOUT: Grouped Fields */}
+                            <div className="space-y-6">
+                                
+                                {/* Group A: CONTEXT (KPI, Dept, Month) */}
+                                <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                                     {/* KPI Selection (Span 5) */}
+                                    <div className="md:col-span-5">
+                                        <div className="flex justify-between">
+                                            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">KPI Name</label>
+                                            <button onClick={handleClearForm} className="text-[10px] text-gray-400 hover:text-osmak-600 flex items-center gap-1 mb-1" title="Reset Form"><Eraser className="w-3 h-3"/> Clear</button>
+                                        </div>
+                                        {isEditMode ? (
+                                            <input type="text" disabled value={currentLineItem.kpiName} className="w-full bg-gray-100 border-gray-300 rounded text-gray-500 cursor-not-allowed"/>
+                                        ) : (
+                                            <select 
+                                                className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-medium"
+                                                value={currentLineItem.kpiName}
+                                                onChange={(e) => handleKPISelect(e.target.value)}
+                                            >
+                                                <option value="">-- Select KPI --</option>
+                                                {scopedKPIsForAdd.map(k => <option key={k} value={k}>{k}</option>)}
+                                            </select>
+                                        )}
                                     </div>
-                                    {isEditMode ? (
-                                        <input type="text" disabled value={currentLineItem.kpiName} className="w-full bg-gray-100 border-gray-300 rounded text-gray-500 cursor-not-allowed"/>
-                                    ) : (
-                                        <select 
-                                            className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-medium"
-                                            value={currentLineItem.kpiName}
-                                            onChange={(e) => handleKPISelect(e.target.value)}
-                                        >
-                                            <option value="">-- Select KPI --</option>
-                                            {scopedKPIsForAdd.map(k => <option key={k} value={k}>{k}</option>)}
-                                        </select>
-                                    )}
+                                    
+                                    {/* Department / Type (Span 4) */}
+                                    <div className="md:col-span-4">
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Dept / Type (Optional)</label>
+                                        <div className="relative">
+                                            <input 
+                                                type="text" 
+                                                list="dept-options"
+                                                className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900"
+                                                value={currentLineItem.department}
+                                                onChange={(e) => setCurrentLineItem({...currentLineItem, department: e.target.value})}
+                                                placeholder="e.g. ICU"
+                                            />
+                                            <datalist id="dept-options">
+                                                {scopedDeptsForAdd.map(d => <option key={d} value={d} />)}
+                                            </datalist>
+                                        </div>
+                                    </div>
+
+                                    {/* Reporting Month (Span 3) - Moved Here */}
+                                    <div className="md:col-span-3">
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Reporting Month</label>
+                                        <input 
+                                            type="month" 
+                                            className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900"
+                                            value={currentLineItem.month}
+                                            onChange={(e) => setCurrentLineItem({...currentLineItem, month: e.target.value})}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                    
+                                    {/* Group B: REFERENCE TARGETS (Left Side) */}
+                                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                        <h5 className="text-xs font-bold text-gray-400 uppercase mb-3 flex items-center gap-2">
+                                            <Target className="w-4 h-4"/> Reference Targets
+                                        </h5>
+                                        <div className="flex gap-4">
+                                             {/* Target Time */}
+                                            <div className="flex-1">
+                                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
+                                                    Target Time
+                                                </label>
+                                                <div className="w-full bg-white border border-gray-300 rounded py-2 px-3 text-sm font-bold text-gray-600 h-10 flex items-center">
+                                                    {showTimeInput ? `${currentLineItem.targetTime} ${currentLineItem.timeUnit}` : '--'}
+                                                </div>
+                                            </div>
+
+                                            {/* Target % */}
+                                            <div className="flex-1">
+                                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
+                                                    Target %
+                                                </label>
+                                                <div className="w-full bg-white border border-gray-300 rounded py-2 px-3 text-sm font-bold text-gray-600 h-10 flex items-center">
+                                                    {showPctInput ? `${currentLineItem.targetPct}%` : '--'}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Group C: USER INPUTS (Right Side) */}
+                                    <div className="bg-blue-50/50 p-4 rounded-lg border border-blue-100 relative">
+                                        <h5 className="text-xs font-bold text-blue-500 uppercase mb-3 flex items-center gap-2">
+                                            <PenTool className="w-4 h-4"/> Enter Data Here
+                                        </h5>
+                                        
+                                        <div className="grid grid-cols-3 gap-4">
+                                            {/* Census */}
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-blue-700 uppercase mb-1">Total Census</label>
+                                                <input 
+                                                    type="number" 
+                                                    className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-semibold"
+                                                    value={currentLineItem.census ?? ''}
+                                                    onChange={(e) => setCurrentLineItem({...currentLineItem, census: Number(e.target.value)})}
+                                                    placeholder="0"
+                                                />
+                                            </div>
+
+                                            {/* Actual Time */}
+                                            <div className={`${!showTimeInput ? 'opacity-50 grayscale' : ''}`}>
+                                                <label className="block text-[10px] font-bold text-blue-700 uppercase mb-1">Actual Time</label>
+                                                <div className="relative">
+                                                    <input 
+                                                        type="number" 
+                                                        disabled={!showTimeInput}
+                                                        className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-bold"
+                                                        value={currentLineItem.actualTime ?? ''}
+                                                        onChange={(e) => setCurrentLineItem({...currentLineItem, actualTime: parseFloat(e.target.value)})}
+                                                    />
+                                                    {showTimeInput && (
+                                                        <span className="absolute right-2 top-2 text-xs text-gray-400">{currentLineItem.timeUnit}</span>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {/* Actual % */}
+                                            <div className={`${!showPctInput && !fallbackShowPct ? 'opacity-50 grayscale' : ''}`}>
+                                                <label className="block text-[10px] font-bold text-blue-700 uppercase mb-1">Actual %</label>
+                                                <div className="relative">
+                                                    <input 
+                                                        type="number" 
+                                                        disabled={!showPctInput && !fallbackShowPct}
+                                                        className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-bold"
+                                                        value={currentLineItem.actualPct ?? ''}
+                                                        onChange={(e) => setCurrentLineItem({...currentLineItem, actualPct: parseFloat(e.target.value)})}
+                                                    />
+                                                    <span className="absolute right-2 top-2 text-xs text-gray-400">%</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                                 
-                                {/* Department / Type (Span 3) */}
-                                <div className="lg:col-span-3">
-                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Dept / Type (Optional)</label>
-                                    <div className="relative">
-                                        <input 
-                                            type="text" 
-                                            list="dept-options"
-                                            className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900"
-                                            value={currentLineItem.department}
-                                            onChange={(e) => setCurrentLineItem({...currentLineItem, department: e.target.value})}
-                                            placeholder="e.g. ICU"
-                                        />
-                                        <datalist id="dept-options">
-                                            {scopedDeptsForAdd.map(d => <option key={d} value={d} />)}
-                                        </datalist>
-                                    </div>
-                                </div>
-
-                                {/* Census (Span 2) */}
-                                <div className="lg:col-span-2">
-                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Total Census</label>
-                                    <input 
-                                        type="number" 
-                                        className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900"
-                                        value={currentLineItem.census ?? ''}
-                                        onChange={(e) => setCurrentLineItem({...currentLineItem, census: Number(e.target.value)})}
-                                        placeholder="0"
-                                    />
-                                </div>
-
-                                {/* Target (Span 3 - Read Only) */}
-                                <div className="lg:col-span-3 flex gap-2">
-                                     {/* Target Time */}
-                                    <div className="flex-1">
-                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1 flex items-center gap-1 whitespace-nowrap">
-                                            <Target className="w-3 h-3"/> Target Time
-                                        </label>
-                                        <div className="w-full bg-gray-100 border border-gray-300 rounded py-2 px-3 text-sm font-bold text-gray-600 h-9 flex items-center">
-                                            {showTimeInput ? `${currentLineItem.targetTime} ${currentLineItem.timeUnit}` : '--'}
-                                        </div>
-                                    </div>
-
-                                    {/* Target % */}
-                                    <div className="flex-1">
-                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1 flex items-center gap-1 whitespace-nowrap">
-                                            <Target className="w-3 h-3"/> Target %
-                                        </label>
-                                        <div className="w-full bg-gray-100 border border-gray-300 rounded py-2 px-3 text-sm font-bold text-gray-600 h-9 flex items-center">
-                                            {showPctInput ? `${currentLineItem.targetPct}%` : '--'}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Second Row: Actuals & Actions */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-4 items-end bg-gray-50 p-3 rounded-lg border border-gray-200">
-                                <div className={`lg:col-span-8 grid ${showTimeInput && showPctInput ? 'grid-cols-3' : 'grid-cols-2'} gap-4`}>
-                                    
-                                    {/* Actual Time (Shown if Target Time exists) */}
-                                    {showTimeInput && (
-                                        <div className="relative">
-                                            <label className="block text-xs font-bold text-osmak-600 uppercase mb-1">
-                                                Actual Time
-                                            </label>
-                                            <input 
-                                                type="number" 
-                                                className="w-full bg-white border border-gray-300 rounded shadow-inner text-lg font-bold text-gray-900 px-3 py-1 focus:ring-2 focus:ring-osmak-500 focus:border-osmak-500"
-                                                value={currentLineItem.actualTime ?? ''}
-                                                onChange={(e) => setCurrentLineItem({...currentLineItem, actualTime: parseFloat(e.target.value)})}
-                                                placeholder="0.00"
-                                            />
-                                            <span className="absolute right-3 top-8 text-gray-400 text-sm pointer-events-none">
-                                                {currentLineItem.timeUnit || 'Mins'}
-                                            </span>
-                                        </div>
-                                    )}
-
-                                    {/* Actual % (Shown if Target % exists, or as fallback) */}
-                                    {(showPctInput || fallbackShowPct) && (
-                                        <div className="relative">
-                                            <label className="block text-xs font-bold text-osmak-600 uppercase mb-1">
-                                                Actual %
-                                            </label>
-                                            <input 
-                                                type="number" 
-                                                className="w-full bg-white border border-gray-300 rounded shadow-inner text-lg font-bold text-gray-900 px-3 py-1 focus:ring-2 focus:ring-osmak-500 focus:border-osmak-500"
-                                                value={currentLineItem.actualPct ?? ''}
-                                                onChange={(e) => setCurrentLineItem({...currentLineItem, actualPct: parseFloat(e.target.value)})}
-                                                placeholder="0%"
-                                            />
-                                            <span className="absolute right-3 top-8 text-gray-400 text-sm pointer-events-none">
-                                                %
-                                            </span>
-                                        </div>
-                                    )}
-
-                                    {/* Remarks */}
-                                    <div className={!(showTimeInput && showPctInput) ? 'col-span-1' : ''}>
+                                {/* Group D: Remarks & Action */}
+                                <div className="flex flex-col md:flex-row gap-4 items-end">
+                                     <div className="flex-1">
                                          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Remarks</label>
                                          <input 
                                             type="text" 
@@ -859,18 +884,16 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                             onChange={(e) => setCurrentLineItem({...currentLineItem, remarks: e.target.value})}
                                          />
                                      </div>
-                                </div>
-
-                                {/* Add Button */}
-                                <div className="lg:col-span-4">
-                                    {!isEditMode && (
-                                        <button 
-                                            onClick={addToBatch}
-                                            className="w-full bg-osmak-600 text-white py-2 rounded font-bold hover:bg-osmak-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
-                                        >
-                                            <CheckCircle className="w-5 h-5" /> Add to List
-                                        </button>
-                                    )}
+                                     <div className="w-full md:w-auto min-w-[150px]">
+                                        {!isEditMode && (
+                                            <button 
+                                                onClick={addToBatch}
+                                                className="w-full bg-osmak-600 text-white py-2 rounded font-bold hover:bg-osmak-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                                            >
+                                                <CheckCircle className="w-5 h-5" /> Add to List
+                                            </button>
+                                        )}
+                                     </div>
                                 </div>
                             </div>
                         </div>
@@ -886,6 +909,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                     <table className="min-w-full divide-y divide-gray-200">
                                         <thead className="bg-gray-50">
                                             <tr>
+                                                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Month</th>
                                                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">KPI</th>
                                                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Census</th>
                                                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Target</th>
@@ -896,6 +920,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                         <tbody className="bg-white divide-y divide-gray-200">
                                             {batchQueue.map((r, i) => (
                                                 <tr key={i}>
+                                                    <td className="px-3 py-2 text-sm text-gray-700 font-medium">{r.month}</td>
                                                     <td className="px-3 py-2 text-sm text-gray-900">{r.kpiName} <span className="text-gray-400 text-xs">{r.department ? `(${r.department})` : ''}</span></td>
                                                     <td className="px-3 py-2 text-sm text-gray-500">{r.census}</td>
                                                     <td className="px-3 py-2 text-sm text-gray-500">{r.kpiType === 'TIME' ? `${r.targetTime} ${r.timeUnit}` : `${r.targetPct}%`}</td>
@@ -915,8 +940,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 flex items-start gap-3">
                                  <AlertTriangle className="w-5 h-5 text-blue-400 mt-0.5" />
                                  <p className="text-xs text-blue-700">
-                                     <strong>Tip:</strong> You can add multiple entries for the same section/month here. Just fill out the form and click "Add to List" repeatedly. 
-                                     The Target % is automatically locked based on the KPI Definition.
+                                     <strong>Tip:</strong> You can add multiple entries for different months in one go. Just change the "Reporting Month" before clicking "Add to List".
                                  </p>
                              </div>
                         )}
