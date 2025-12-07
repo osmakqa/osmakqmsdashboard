@@ -1,4 +1,5 @@
-import { KPIRecord, SectionName, PerformanceStatus, SectionPerformance, KPIDefinition } from '../types';
+
+import { KPIRecord, SectionName, PerformanceStatus, SectionPerformance, KPIDefinition, KPIType } from '../types';
 import { MOCK_DATA, KPI_DEFINITIONS } from '../constants';
 
 // UPDATED: Using the specific Google Apps Script Web App URL provided
@@ -169,6 +170,16 @@ export const dataService = {
       definition: d.definition,
       formula: d.formula,
       target: d.target,
+      
+      // Map specific target columns
+      targetTime: d.targetTime ? Number(d.targetTime) : undefined,
+      targetPct: d.targetPct ? Number(d.targetPct) : undefined,
+      timeUnit: d.timeUnit,
+      
+      // Classification Columns
+      department: d.department,
+      kpiType: d.kpiType as KPIType,
+
       responsible: d.responsible,
       schedule: d.schedule
     }));

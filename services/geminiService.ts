@@ -1,16 +1,14 @@
 import { GoogleGenAI } from "@google/genai";
 import { KPIRecord } from "../types";
 
-const apiKey = process.env.API_KEY;
-
 export const generateInterpretation = async (records: KPIRecord[], kpiName: string, section: string) => {
-  if (!apiKey) {
+  if (!process.env.API_KEY) {
     console.warn("API Key not found for Gemini.");
     return "API Key missing. Cannot generate interpretation.";
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     // Sort records chronologically
     const sortedRecords = [...records].sort((a, b) => new Date(a.month).getTime() - new Date(b.month).getTime());

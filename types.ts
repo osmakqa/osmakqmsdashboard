@@ -1,3 +1,4 @@
+
 export enum SectionName {
   ADMITTING = "Admitting Section",
   CARDIO = "Cardiovascular Diagnostics",
@@ -73,6 +74,16 @@ export interface KPIDefinition {
   definition: string;
   formula: string;
   target: string;
+  
+  // Specific Target Columns
+  targetTime?: number;
+  targetPct?: number;
+  timeUnit?: string;
+  
+  // Classification Columns
+  department?: string;
+  kpiType?: KPIType;
+
   responsible: string; // e.g. "Head Nurse"
   schedule: string; // e.g. "Monthly"
 }

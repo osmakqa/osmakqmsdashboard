@@ -1,7 +1,8 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { KPIRecord, SectionName, KPIType, KPIDefinition } from '../types';
 import { dataService } from '../services/dataService';
-import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet } from 'lucide-react';
+import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet, Calendar, Target, CheckCircle, AlertTriangle, Eraser } from 'lucide-react';
 import LoginModal from './LoginModal';
 import { GOOGLE_SHEET_URL } from '../constants';
 
@@ -14,23 +15,43 @@ interface RecordsProps {
 // Helper to parse target strings like "95%" or "< 30 Mins"
 const parseKPITarget = (targetString: string): Partial<KPIRecord> => {
   const result: Partial<KPIRecord> = { kpiType: 'PERCENTAGE', targetPct: 0 };
-  const numMatch = targetString.match(/[\d.]+/);
-  const value = numMatch ? parseFloat(numMatch[0]) : 0;
-
-  if (targetString.includes('%')) {
+  
+  // Dual parsing logic
+  const pctMatch = targetString.match(/([\d.]+)%/);
+  const timeMatch = targetString.match(/([\d.]+)\s*(min|hour|day)/i);
+  
+  if (pctMatch) {
     result.kpiType = 'PERCENTAGE';
-    result.targetPct = value;
-    result.targetTime = undefined;
-    result.timeUnit = undefined;
-  } else {
-    result.kpiType = 'TIME';
-    result.targetTime = value;
-    result.targetPct = undefined;
-    if (/min/i.test(targetString)) result.timeUnit = 'Mins';
-    else if (/hour/i.test(targetString)) result.timeUnit = 'Hours';
-    else if (/day/i.test(targetString)) result.timeUnit = 'Days';
-    else result.timeUnit = 'Mins';
+    result.targetPct = parseFloat(pctMatch[1]);
   }
+  
+  if (timeMatch) {
+    if (!result.kpiType || !pctMatch) result.kpiType = 'TIME'; // Default to TIME if no % found, or both found
+    result.targetTime = parseFloat(timeMatch[1]);
+    const unitStr = timeMatch[2].toLowerCase();
+    if (unitStr.includes('min')) result.timeUnit = 'Mins';
+    else if (unitStr.includes('hour')) result.timeUnit = 'Hours';
+    else if (unitStr.includes('day')) result.timeUnit = 'Days';
+  } else if (!pctMatch) {
+     // Fallback if generic number
+     const numMatch = targetString.match(/[\d.]+/);
+     if (numMatch) {
+         if (targetString.toLowerCase().includes('day')) {
+             result.kpiType = 'TIME';
+             result.targetTime = parseFloat(numMatch[0]);
+             result.timeUnit = 'Days';
+         } else if (targetString.toLowerCase().includes('min')) {
+            result.kpiType = 'TIME';
+            result.targetTime = parseFloat(numMatch[0]);
+            result.timeUnit = 'Mins';
+         } else {
+             // Default assume percentage if unclear
+             result.kpiType = 'PERCENTAGE';
+             result.targetPct = parseFloat(numMatch[0]);
+         }
+     }
+  }
+
   return result;
 };
 
@@ -57,29 +78,15 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   const [isEditMode, setIsEditMode] = useState(false);
   const [loading, setLoading] = useState(false);
   
-  // Batch Entry State (For "Spreadsheet" Mode)
-  type BatchRow = Partial<KPIRecord> & { isNewKpi?: boolean; isNewDept?: boolean };
-  const [batchQueue, setBatchQueue] = useState<BatchRow[]>([]);
+  // ENTRY STATE
+  const [selectedAddSection, setSelectedAddSection] = useState<string>(SectionName.ADMITTING);
+  const [selectedAddMonth, setSelectedAddMonth] = useState<string>(new Date().toISOString().slice(0, 7)); // YYYY-MM
   
-  // Single Entry State (For Edit Mode Only)
-  const [currentEntry, setCurrentEntry] = useState<Partial<KPIRecord>>({});
-
-  // Default empty record template
-  const defaultRecord: Partial<KPIRecord> = {
-      section: SectionName.ADMITTING,
-      kpiName: '',
-      department: '',
-      kpiType: 'PERCENTAGE',
-      month: new Date().toISOString().slice(0, 7) + '-01',
-      census: undefined,
-      targetPct: undefined,
-      actualPct: undefined,
-      targetTime: undefined,
-      actualTime: undefined,
-      timeUnit: 'Mins',
-      dueDate: new Date().toISOString().slice(0, 10),
-      dateSubmitted: new Date().toISOString().slice(0, 10),
-  };
+  // Current Line Item State
+  const [currentLineItem, setCurrentLineItem] = useState<Partial<KPIRecord>>({});
+  
+  // Batch Queue
+  const [batchQueue, setBatchQueue] = useState<KPIRecord[]>([]);
 
   // Filter Dropdown Options
   const availableKPIs = useMemo(() => {
@@ -95,30 +102,149 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
     return Array.from(new Set(deptRecords.map(r => r.department))).sort();
   }, [filterSection, records]);
 
-  // Helper to get dropdown options for a specific row in the batch table
-  const getScopedKPIs = (section: string | undefined) => {
-     if (!section) return [];
-     const definedKPIs = definitions.filter(d => d.section === section).map(d => d.kpiName);
-     const existingKPIs = records.filter(r => r.section === section).map(r => r.kpiName);
-     return Array.from(new Set([...definedKPIs, ...existingKPIs])).sort();
+  // Add Entry Helpers
+  const scopedKPIsForAdd = useMemo(() => {
+      if (!selectedAddSection) return [];
+      // Combine KPIs from definitions AND existing records for that section
+      // This ensures legacy KPIs or ad-hoc KPIs are also selectable
+      const definedKPIs = definitions
+        .filter(d => d.section === selectedAddSection)
+        .map(d => d.kpiName);
+        
+      const existingRecordKPIs = records
+        .filter(r => r.section === selectedAddSection)
+        .map(r => r.kpiName);
+
+      return Array.from(new Set([...definedKPIs, ...existingRecordKPIs])).sort();
+  }, [selectedAddSection, definitions, records]);
+
+  const scopedDeptsForAdd = useMemo(() => {
+      if (!selectedAddSection) return [];
+      
+      let filteredRecords = records.filter(r => r.section === selectedAddSection);
+      
+      // If a KPI is selected, restrict departments to that KPI only
+      if (currentLineItem.kpiName) {
+          filteredRecords = filteredRecords.filter(r => r.kpiName === currentLineItem.kpiName);
+      }
+      
+      const depts = filteredRecords.map(r => r.department).filter(Boolean);
+      return Array.from(new Set(depts)).sort();
+  }, [selectedAddSection, currentLineItem.kpiName, records]);
+
+
+  // Initialize Line Item
+  const resetLineItem = () => {
+      setCurrentLineItem({
+          kpiName: '',
+          department: '',
+          census: undefined,
+          targetPct: undefined,
+          actualPct: undefined,
+          targetTime: undefined,
+          actualTime: undefined,
+          timeUnit: 'Mins',
+          kpiType: 'PERCENTAGE',
+          dueDate: new Date().toISOString().slice(0, 10),
+          dateSubmitted: new Date().toISOString().slice(0, 10),
+      });
+  };
+
+  // --- LOGIC: Handle KPI Selection ---
+  const handleKPISelect = (kpiName: string) => {
+      // 1. Try to find Definition first
+      const def = definitions.find(d => d.section === selectedAddSection && d.kpiName === kpiName);
+      
+      let update: Partial<KPIRecord> = { 
+          kpiName,
+          targetPct: undefined,
+          targetTime: undefined,
+          timeUnit: undefined,
+          kpiType: 'PERCENTAGE',
+          department: '' // Reset dept initially
+      };
+      
+      if (def) {
+          // Priority: Check specific columns first (targetTime, targetPct)
+          const hasTime = def.targetTime !== undefined && def.targetTime !== null;
+          const hasPct = def.targetPct !== undefined && def.targetPct !== null;
+
+          if (hasTime || hasPct) {
+              if (hasPct) update.targetPct = def.targetPct;
+              if (hasTime) {
+                  update.targetTime = def.targetTime;
+                  update.timeUnit = def.timeUnit || 'Mins';
+              }
+              
+              // Infer Type based on what is present
+              if (hasTime && hasPct) {
+                   // Dual metric, default to TIME but UI will show both
+                   update.kpiType = 'TIME'; 
+              } else if (hasTime) {
+                   update.kpiType = 'TIME';
+              } else {
+                   update.kpiType = 'PERCENTAGE';
+              }
+
+          } else if (def.target) {
+             // Fallback: Parse Target string if specific columns empty
+             update = { ...update, ...parseKPITarget(def.target) };
+          }
+
+          // ** NEW: Auto-fill Department & KPI Type from Definition if available **
+          if (def.department) {
+              update.department = def.department;
+          }
+          if (def.kpiType) {
+              update.kpiType = def.kpiType;
+          }
+
+      } else {
+          // 2. Fallback: Try to learn from most recent record for this KPI
+          const recentRecord = records
+            .filter(r => r.section === selectedAddSection && r.kpiName === kpiName)
+            .sort((a,b) => new Date(b.month).getTime() - new Date(a.month).getTime())[0];
+            
+          if (recentRecord) {
+              update = {
+                  ...update,
+                  kpiType: recentRecord.kpiType,
+                  targetPct: recentRecord.targetPct,
+                  targetTime: recentRecord.targetTime,
+                  timeUnit: recentRecord.timeUnit,
+                  department: recentRecord.department // Learn department too
+              };
+          } else {
+             // 3. Default if completely new
+             update = { ...update, targetPct: 0, targetTime: undefined, timeUnit: 'Mins' };
+          }
+      }
+
+      setCurrentLineItem(prev => ({ ...prev, ...update }));
   };
   
-  const getScopedDepts = (section: string | undefined) => {
-      if (!section) return [];
-      const depts = records.filter(r => r.section === section).map(r => r.department);
-      return Array.from(new Set(depts)).sort();
-  }
+  const handleClearForm = () => {
+      resetLineItem();
+  };
 
-  // Reset form when modal opens
+  // Auto-Select First KPI when Section Changes
   useEffect(() => {
-    if (isModalOpen) {
-        if (!isEditMode) {
-            setBatchQueue([{ 
-                ...defaultRecord, 
-                section: (filterSection as SectionName) || SectionName.ADMITTING,
-                id: `new-${Date.now()}`
-            }]);
-        }
+      if (isModalOpen && !isEditMode && scopedKPIsForAdd.length > 0) {
+          // Only auto-select if current selection is empty or invalid for the new section
+          if (!currentLineItem.kpiName || !scopedKPIsForAdd.includes(currentLineItem.kpiName)) {
+              handleKPISelect(scopedKPIsForAdd[0]);
+          }
+      }
+  }, [selectedAddSection, scopedKPIsForAdd, isModalOpen, isEditMode]);
+
+
+  // When Modal Opens
+  useEffect(() => {
+    if (isModalOpen && !isEditMode) {
+        setBatchQueue([]);
+        resetLineItem();
+        // Default to filtered section if available
+        if (filterSection) setSelectedAddSection(filterSection);
     }
   }, [isModalOpen, isEditMode]);
 
@@ -218,7 +344,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
         setIsLoginOpen(true);
       } else {
         setIsEditMode(true);
-        setCurrentEntry({...record});
+        setCurrentLineItem({...record}); // Reuse currentLineItem for edit mode state
         setIsModalOpen(true);
       }
   };
@@ -254,7 +380,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
           const record = records.find(r => r.id === pendingRecordId);
           if (record) {
               setIsEditMode(true);
-              setCurrentEntry({...record});
+              setCurrentLineItem({...record});
               setIsModalOpen(true);
           }
       } else if (pendingAction === 'delete' && pendingRecordId) {
@@ -276,88 +402,74 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
     }
   };
 
-  // --- Spreadsheet Logic ---
-  const handleRowChange = (index: number, field: keyof BatchRow, value: any) => {
-      const newQueue = [...batchQueue];
-      const currentRow = { ...newQueue[index], [field]: value };
-      
-      // If Section changes, reset KPI and Dept
-      if (field === 'section') {
-          currentRow.kpiName = '';
-          currentRow.department = '';
-          currentRow.isNewKpi = false;
-          currentRow.isNewDept = false;
-      }
 
-      // Handle "Create New" selection
-      if (field === 'kpiName' && value === 'CREATE_NEW') {
-          currentRow.isNewKpi = true;
-          currentRow.kpiName = ''; // Clear it for text input
-      } else if (field === 'kpiName' && currentRow.isNewKpi) {
-          // Do nothing, let user type
-      } else if (field === 'kpiName') {
-          currentRow.isNewKpi = false;
-          // Prefill logic
-          const definition = definitions.find(d => d.kpiName === value && d.section === currentRow.section);
-          if (definition && definition.target) {
-              const parsedTarget = parseKPITarget(definition.target);
-              Object.assign(currentRow, parsedTarget);
-          }
-      }
-
-      if (field === 'department' && value === 'CREATE_NEW') {
-          currentRow.isNewDept = true;
-          currentRow.department = ''; // Clear it for text input
-      } else if (field === 'department') {
-          currentRow.isNewDept = false;
-      }
-
-      newQueue[index] = currentRow;
-      setBatchQueue(newQueue);
-  };
-
-  const addNewRow = () => {
-      const lastRow = batchQueue[batchQueue.length - 1];
-      const newRow = {
-          ...defaultRecord,
-          section: lastRow?.section || defaultRecord.section,
-          month: lastRow?.month || defaultRecord.month,
-          dueDate: lastRow?.dueDate || defaultRecord.dueDate,
-          dateSubmitted: lastRow?.dateSubmitted || defaultRecord.dateSubmitted,
-          id: `new-${Date.now()}`
-      };
-      setBatchQueue([...batchQueue, newRow]);
-  };
-
-  const duplicateRow = (index: number) => {
-      const rowToCopy = batchQueue[index];
-      const newRow = { ...rowToCopy, id: `copy-${Date.now()}` };
-      const newQueue = [...batchQueue];
-      newQueue.splice(index + 1, 0, newRow);
-      setBatchQueue(newQueue);
-  };
-
-  const removeRow = (index: number) => {
-      if (batchQueue.length === 1) {
-          alert("Cannot remove the last row.");
+  const addToBatch = () => {
+      // Validate
+      if (!currentLineItem.kpiName) {
+          alert("Please select a KPI Name");
           return;
       }
+
+      const hasTime = currentLineItem.targetTime !== undefined && currentLineItem.targetTime !== null;
+      const hasPct = currentLineItem.targetPct !== undefined && currentLineItem.targetPct !== null;
+
+      // Validation logic: Ensure at least one actual value is provided matching the target
+      let valid = false;
+      if (hasTime && (currentLineItem.actualTime !== undefined && currentLineItem.actualTime !== null)) valid = true;
+      if (hasPct && (currentLineItem.actualPct !== undefined && currentLineItem.actualPct !== null)) valid = true;
+      
+      if (!valid) {
+          if (hasTime && hasPct) alert("Please enter at least Actual Time or Actual %");
+          else if (hasTime) alert("Please enter Actual Time");
+          else alert("Please enter Actual %");
+          return;
+      }
+
+      const newRecord: KPIRecord = {
+          id: `new-${Date.now()}`,
+          section: selectedAddSection as SectionName,
+          month: `${selectedAddMonth}-01`,
+          dueDate: currentLineItem.dueDate || new Date().toISOString().slice(0, 10),
+          dateSubmitted: new Date().toISOString().slice(0, 10),
+          kpiName: currentLineItem.kpiName,
+          department: currentLineItem.department || '',
+          kpiType: currentLineItem.kpiType || 'PERCENTAGE',
+          census: Number(currentLineItem.census) || 0,
+          
+          targetPct: Number(currentLineItem.targetPct) || 0,
+          actualPct: Number(currentLineItem.actualPct) || 0,
+          
+          targetTime: currentLineItem.targetTime ? Number(currentLineItem.targetTime) : undefined,
+          actualTime: currentLineItem.actualTime ? Number(currentLineItem.actualTime) : undefined,
+          timeUnit: currentLineItem.timeUnit || 'Mins',
+          remarks: currentLineItem.remarks
+      };
+
+      setBatchQueue([...batchQueue, newRecord]);
+      // Reset line item but keep the Department if user wants to add another for same dept
+      setCurrentLineItem(prev => ({
+          ...prev,
+          // Do not clear KPI name here to allow rapid entry
+          kpiName: '', 
+          targetPct: undefined,
+          actualPct: undefined,
+          targetTime: undefined,
+          actualTime: undefined
+      }));
+  };
+
+  const removeFromBatch = (index: number) => {
       const newQueue = [...batchQueue];
       newQueue.splice(index, 1);
       setBatchQueue(newQueue);
   };
 
   const handleSaveBatch = async () => {
-      // Validate
-      const invalidRow = batchQueue.findIndex(r => !r.section || !r.kpiName || !r.department);
-      if (invalidRow >= 0) {
-          alert(`Row ${invalidRow + 1} is missing required fields (Section, KPI, or Department).`);
-          return;
-      }
+      if (batchQueue.length === 0) return;
 
       setLoading(true);
       try {
-        const promises = batchQueue.map(record => dataService.addRecord(record as KPIRecord));
+        const promises = batchQueue.map(record => dataService.addRecord(record));
         await Promise.all(promises);
         
         setTimeout(() => {
@@ -376,10 +488,10 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
 
   const handleUpdateRecord = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (currentEntry.id) {
+      if (currentLineItem.id) {
         setLoading(true);
         try {
-            await dataService.updateRecord(currentEntry as KPIRecord);
+            await dataService.updateRecord(currentLineItem as KPIRecord);
             setTimeout(() => {
                 onRefresh();
                 setLoading(false);
@@ -397,6 +509,12 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       if (!sortConfig || sortConfig.key !== key) return null;
       return sortConfig.direction === 'asc' ? <ArrowUp className="w-3 h-3 inline ml-1" /> : <ArrowDown className="w-3 h-3 inline ml-1" />;
   };
+
+  // Visibility logic for Inputs
+  const showTimeInput = currentLineItem.targetTime !== undefined && currentLineItem.targetTime !== null;
+  const showPctInput = currentLineItem.targetPct !== undefined && currentLineItem.targetPct !== null;
+  // If neither defined yet (e.g. new KPI), default to Pct or allow generic choice? Defaulting to Pct for simplicity until definition found
+  const fallbackShowPct = !showTimeInput && !showPctInput;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -490,10 +608,8 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('kpiName')}>KPI {renderSortIcon('kpiName')}</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('department')}>Type/Dept {renderSortIcon('department')}</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('measureType')}>Type {renderSortIcon('measureType')}</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Target (Time)</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actual (Time)</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Target (%)</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[120px]">Actual (%)</th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Target</th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actual</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('conformance')}>Status {renderSortIcon('conformance')}</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('month')}>Date {renderSortIcon('month')}</th>
                     <th scope="col" className="relative px-6 py-3"><span className="sr-only">Actions</span></th>
@@ -506,21 +622,22 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                     const actualTimeDisplay = record.actualTime !== undefined && record.actualTime !== null && !isNaN(Number(record.actualTime)) ? Number(record.actualTime).toFixed(2) : '-';
                     const actualPctDisplay = record.actualPct !== undefined && record.actualPct !== null && !isNaN(Number(record.actualPct)) ? Number(record.actualPct).toFixed(2) : '0.00';
                     
+                    const displayTarget = record.kpiType === 'TIME' ? `${record.targetTime} ${record.timeUnit}` : `${record.targetPct}%`;
+                    const displayActual = record.kpiType === 'TIME' ? `${actualTimeDisplay} ${record.timeUnit}` : `${actualPctDisplay}%`;
+
+                    // Handle dual display if defined
+                    const hasDual = record.targetTime && record.targetPct;
+                    const finalTarget = hasDual ? `${record.targetTime} ${record.timeUnit} | ${record.targetPct}%` : displayTarget;
+                    const finalActual = hasDual ? `${actualTimeDisplay} ${record.timeUnit} | ${actualPctDisplay}%` : displayActual;
+
                     return (
                     <tr key={record.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap"><div className="font-medium text-gray-900">{record.section}</div></td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500 max-w-xs truncate" title={record.kpiName}>{record.kpiName}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500">{record.department}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-gray-500 text-xs font-semibold">{measureType}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{record.kpiType === 'TIME' ? `${record.targetTime} ${record.timeUnit}` : '-'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-700">{record.kpiType === 'TIME' ? `${actualTimeDisplay} ${record.timeUnit}` : '-'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{record.targetPct}%</td>
-                        <td className="px-6 py-4 whitespace-nowrap font-bold text-gray-700">
-                            <div className="relative w-full h-8 bg-gray-100 rounded-md overflow-hidden border border-gray-200">
-                                <div className={`absolute top-0 left-0 h-full transition-all duration-500 ${isPass ? 'bg-osmak-400' : 'bg-red-400'}`} style={{ width: `${Math.min(Number(actualPctDisplay), 100)}%` }}></div>
-                                <span className="absolute inset-0 flex items-center justify-center text-xs z-10 font-bold text-gray-800 drop-shadow-sm">{actualPctDisplay}%</span>
-                            </div>
-                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{finalTarget}</td>
+                        <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-700">{finalActual}</td>
                         <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${isPass ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{isPass ? 'Conformant' : 'Non-Conformant'}</span>
                         </td>
@@ -554,190 +671,270 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
 
       <LoginModal isOpen={isLoginOpen} onClose={() => setIsLoginOpen(false)} onLogin={handleLoginSuccess} />
 
-      {/* MODAL */}
+      {/* ADD / EDIT MODAL */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-            <div className={`bg-white rounded-lg w-full ${isEditMode ? 'max-w-2xl' : 'max-w-[95vw]'} max-h-[90vh] flex flex-col shadow-2xl overflow-hidden`}>
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-fade-in">
+            <div className={`bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden`}>
                 
-                {/* Modal Header */}
-                <div className="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-gray-50">
-                    <div className="flex items-center gap-2">
-                         {isEditMode ? <Edit2 className="w-5 h-5 text-osmak-600"/> : <ListPlus className="w-5 h-5 text-osmak-600"/>}
-                         <h3 className="text-lg font-bold text-gray-900">{isEditMode ? 'Edit Single Record' : 'Batch Data Entry'}</h3>
+                {/* Header */}
+                <div className="px-6 py-4 border-b border-gray-100 bg-osmak-50 flex justify-between items-center">
+                    <div>
+                        <h3 className="text-xl font-bold text-osmak-800 flex items-center gap-2">
+                            {isEditMode ? <Edit2 className="w-6 h-6"/> : <ListPlus className="w-6 h-6"/>}
+                            {isEditMode ? 'Edit Record' : 'Add KPI Records'}
+                        </h3>
+                        <p className="text-sm text-osmak-600">
+                            {isEditMode ? 'Modify an existing record' : 'Submit multiple monthly reports for a section'}
+                        </p>
                     </div>
-                    <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full p-1"><X className="w-6 h-6"/></button>
+                    <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full p-2"><X className="w-6 h-6"/></button>
                 </div>
 
-                {/* Modal Content */}
-                <div className="flex-1 overflow-auto bg-white">
-                    {isEditMode ? (
-                        // ----------------- EDIT MODE (Single Form) -----------------
-                        <form onSubmit={handleUpdateRecord} className="p-6 space-y-6">
-                           {/* ... Edit form ... */}
-                        </form>
-                    ) : (
-                        // ----------------- ADD MODE (Spreadsheet Table) -----------------
-                        <div className="min-h-[400px]">
-                            <div className="overflow-x-auto">
-                                <table className="min-w-max divide-y divide-gray-200 border-collapse">
-                                    <thead className="bg-gray-100 sticky top-0 z-10 shadow-sm">
-                                        <tr>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-40">Section</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-48">KPI Name</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-40">Dept/Type</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-32">Month</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-20">Census</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-20 bg-blue-50/50">Tgt %</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-20 bg-green-50/50">Act %</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-20 bg-gray-50">Type</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-20 bg-gray-50">Tgt Time</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-20 bg-gray-50">Act Time</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-24 bg-gray-50">Unit</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-32">Due</th>
-                                            <th className="px-2 py-3 text-left text-xs font-bold text-gray-600 uppercase w-32">Submit</th>
-                                            <th className="px-2 py-3 text-center text-xs font-bold text-gray-600 uppercase w-16 sticky right-0 bg-gray-100 shadow-l">Action</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="bg-white divide-y divide-gray-200">
-                                        {batchQueue.map((row, index) => (
-                                            <tr key={row.id || index} className="group hover:bg-gray-50">
-                                                <td className="p-1 border-r border-gray-100">
-                                                    <select 
-                                                        className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-gray-900"
-                                                        value={row.section}
-                                                        onChange={e => handleRowChange(index, 'section', e.target.value)}
-                                                    >
-                                                        {Object.values(SectionName).map(s => <option key={s} value={s}>{s}</option>)}
-                                                    </select>
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100">
-                                                    {row.isNewKpi ? (
-                                                        <input 
-                                                            type="text" 
-                                                            autoFocus
-                                                            className="w-full text-xs border-0 bg-yellow-50 p-1 ring-2 ring-osmak-500 rounded text-gray-900"
-                                                            value={row.kpiName}
-                                                            onChange={e => handleRowChange(index, 'kpiName', e.target.value)}
-                                                            onBlur={() => { if (!row.kpiName) handleRowChange(index, 'isNewKpi', false) }}
-                                                        />
-                                                    ) : (
-                                                        <select 
-                                                            className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-gray-900"
-                                                            value={row.kpiName}
-                                                            onChange={e => handleRowChange(index, 'kpiName', e.target.value)}
-                                                        >
-                                                            <option value="">Select...</option>
-                                                            {getScopedKPIs(row.section).map(k => <option key={k} value={k}>{k}</option>)}
-                                                            <option value="CREATE_NEW" className="font-bold text-blue-600 bg-gray-100">+ Create New</option>
-                                                        </select>
-                                                    )}
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100">
-                                                     {row.isNewDept ? (
-                                                        <input 
-                                                            type="text" 
-                                                            autoFocus
-                                                            className="w-full text-xs border-0 bg-yellow-50 p-1 ring-2 ring-osmak-500 rounded text-gray-900"
-                                                            value={row.department}
-                                                            onChange={e => handleRowChange(index, 'department', e.target.value)}
-                                                            onBlur={() => { if (!row.department) handleRowChange(index, 'isNewDept', false) }}
-                                                        />
-                                                    ) : (
-                                                        <select 
-                                                            className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-gray-900"
-                                                            value={row.department}
-                                                            onChange={e => handleRowChange(index, 'department', e.target.value)}
-                                                        >
-                                                            <option value="">Select...</option>
-                                                            {getScopedDepts(row.section).map(d => <option key={d} value={d}>{d}</option>)}
-                                                            <option value="CREATE_NEW" className="font-bold text-blue-600 bg-gray-100">+ Create New</option>
-                                                        </select>
-                                                    )}
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100">
-                                                    <input 
-                                                        type="month" 
-                                                        className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-gray-900" 
-                                                        value={row.month ? row.month.slice(0, 7) : ''} 
-                                                        onChange={e => handleRowChange(index, 'month', e.target.value ? `${e.target.value}-01` : '')} 
-                                                    />
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100">
-                                                    <input type="number" placeholder="-" className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-right text-gray-900" value={row.census ?? ''} onChange={e => handleRowChange(index, 'census', e.target.value)} />
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100 bg-blue-50/20">
-                                                    <input type="number" placeholder="%" className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-right font-medium text-blue-800" value={row.targetPct ?? ''} onChange={e => handleRowChange(index, 'targetPct', e.target.value)} />
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100 bg-green-50/20">
-                                                    <input type="number" placeholder="%" className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-right font-bold text-green-800" value={row.actualPct ?? ''} onChange={e => handleRowChange(index, 'actualPct', e.target.value)} />
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100 bg-gray-50/50">
-                                                    <select className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-gray-900" value={row.kpiType} onChange={e => handleRowChange(index, 'kpiType', e.target.value)}>
-                                                        <option value="PERCENTAGE">%</option><option value="TIME">Time</option>
-                                                    </select>
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100 bg-gray-50/50">
-                                                    <input disabled={row.kpiType !== 'TIME'} type="number" className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-right disabled:opacity-30 text-gray-900" value={row.targetTime ?? ''} onChange={e => handleRowChange(index, 'targetTime', e.target.value)} />
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100 bg-gray-50/50">
-                                                    <input disabled={row.kpiType !== 'TIME'} type="number" className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-right disabled:opacity-30 text-gray-900" value={row.actualTime ?? ''} onChange={e => handleRowChange(index, 'actualTime', e.target.value)} />
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100 bg-gray-50/50">
-                                                    <select
-                                                        disabled={row.kpiType !== 'TIME'}
-                                                        className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded disabled:opacity-30 text-gray-900"
-                                                        value={row.timeUnit || 'Mins'}
-                                                        onChange={e => handleRowChange(index, 'timeUnit', e.target.value)}
-                                                    >
-                                                        <option>Mins</option>
-                                                        <option>Hours</option>
-                                                        <option>Days</option>
-                                                    </select>
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100">
-                                                    <input type="date" className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-gray-900" value={row.dueDate} onChange={e => handleRowChange(index, 'dueDate', e.target.value)} />
-                                                </td>
-                                                <td className="p-1 border-r border-gray-100">
-                                                    <input type="date" className="w-full text-xs border-0 bg-transparent p-1 focus:ring-2 focus:ring-osmak-500 rounded text-gray-900" value={row.dateSubmitted} onChange={e => handleRowChange(index, 'dateSubmitted', e.target.value)} />
-                                                </td>
-                                                <td className="p-1 text-center sticky right-0 bg-white group-hover:bg-gray-50 shadow-l border-l border-gray-100">
-                                                    <div className="flex items-center justify-center gap-1">
-                                                        <button onClick={() => duplicateRow(index)} className="p-1 text-blue-500 hover:bg-blue-100 rounded" title="Duplicate Row"><Copy className="w-3 h-3"/></button>
-                                                        <button onClick={() => removeRow(index)} className="p-1 text-red-500 hover:bg-red-100 rounded" title="Remove Row"><X className="w-3 h-3"/></button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                {/* Content */}
+                <div className="flex-1 overflow-auto p-6 bg-white">
+                    <div className="space-y-6">
+                        
+                        {/* 1. SECTION & MONTH SELECTION (Top Bar) */}
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Section / Unit</label>
+                                {isEditMode ? (
+                                    <p className="font-bold text-osmak-800">{currentLineItem.section}</p>
+                                ) : (
+                                    <select 
+                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-osmak-500 focus:border-osmak-500 py-2.5 text-sm font-medium"
+                                        value={selectedAddSection}
+                                        onChange={(e) => setSelectedAddSection(e.target.value)}
+                                    >
+                                        {Object.values(SectionName).map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                )}
                             </div>
-                            <div className="p-4 bg-gray-50 border-t border-gray-200 flex justify-center">
-                                <button onClick={addNewRow} className="flex items-center gap-2 text-osmak-700 hover:bg-white hover:shadow-sm px-4 py-2 rounded-full transition-all border border-transparent hover:border-gray-200">
-                                    <Plus className="w-4 h-4" /> Add Row
-                                </button>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Reporting Month</label>
+                                {isEditMode ? (
+                                     <p className="font-bold text-gray-800">{new Date(currentLineItem.month || '').toLocaleDateString(undefined, {month: 'long', year: 'numeric'})}</p>
+                                ) : (
+                                    <input 
+                                        type="month" 
+                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-osmak-500 focus:border-osmak-500 py-2.5 text-sm font-medium"
+                                        value={selectedAddMonth}
+                                        onChange={(e) => setSelectedAddMonth(e.target.value)}
+                                    />
+                                )}
                             </div>
                         </div>
-                    )}
+
+                        {/* 2. DATA ENTRY ROW */}
+                        <div className="bg-white border-2 border-osmak-100 rounded-xl p-5 shadow-sm space-y-4 relative">
+                            <div className="absolute -top-3 left-4 bg-white px-2 text-xs font-bold text-osmak-600 uppercase border border-osmak-100 rounded">
+                                {isEditMode ? 'Edit Details' : 'New Entry'}
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-4">
+                                {/* KPI Selection (Span 4) */}
+                                <div className="lg:col-span-4">
+                                    <div className="flex justify-between">
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">KPI Name</label>
+                                        <button onClick={handleClearForm} className="text-[10px] text-gray-400 hover:text-osmak-600 flex items-center gap-1 mb-1" title="Reset Filters"><Eraser className="w-3 h-3"/> Clear Form</button>
+                                    </div>
+                                    {isEditMode ? (
+                                        <input type="text" disabled value={currentLineItem.kpiName} className="w-full bg-gray-100 border-gray-300 rounded text-gray-500 cursor-not-allowed"/>
+                                    ) : (
+                                        <select 
+                                            className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-medium"
+                                            value={currentLineItem.kpiName}
+                                            onChange={(e) => handleKPISelect(e.target.value)}
+                                        >
+                                            <option value="">-- Select KPI --</option>
+                                            {scopedKPIsForAdd.map(k => <option key={k} value={k}>{k}</option>)}
+                                        </select>
+                                    )}
+                                </div>
+                                
+                                {/* Department / Type (Span 3) */}
+                                <div className="lg:col-span-3">
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Dept / Type (Optional)</label>
+                                    <div className="relative">
+                                        <input 
+                                            type="text" 
+                                            list="dept-options"
+                                            className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900"
+                                            value={currentLineItem.department}
+                                            onChange={(e) => setCurrentLineItem({...currentLineItem, department: e.target.value})}
+                                            placeholder="e.g. ICU"
+                                        />
+                                        <datalist id="dept-options">
+                                            {scopedDeptsForAdd.map(d => <option key={d} value={d} />)}
+                                        </datalist>
+                                    </div>
+                                </div>
+
+                                {/* Census (Span 2) */}
+                                <div className="lg:col-span-2">
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Total Census</label>
+                                    <input 
+                                        type="number" 
+                                        className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900"
+                                        value={currentLineItem.census ?? ''}
+                                        onChange={(e) => setCurrentLineItem({...currentLineItem, census: Number(e.target.value)})}
+                                        placeholder="0"
+                                    />
+                                </div>
+
+                                {/* Target (Span 3 - Read Only) */}
+                                <div className="lg:col-span-3 flex gap-2">
+                                     {/* Target Time */}
+                                    <div className="flex-1">
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1 flex items-center gap-1 whitespace-nowrap">
+                                            <Target className="w-3 h-3"/> Target Time
+                                        </label>
+                                        <div className="w-full bg-gray-100 border border-gray-300 rounded py-2 px-3 text-sm font-bold text-gray-600 h-9 flex items-center">
+                                            {showTimeInput ? `${currentLineItem.targetTime} ${currentLineItem.timeUnit}` : '--'}
+                                        </div>
+                                    </div>
+
+                                    {/* Target % */}
+                                    <div className="flex-1">
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1 flex items-center gap-1 whitespace-nowrap">
+                                            <Target className="w-3 h-3"/> Target %
+                                        </label>
+                                        <div className="w-full bg-gray-100 border border-gray-300 rounded py-2 px-3 text-sm font-bold text-gray-600 h-9 flex items-center">
+                                            {showPctInput ? `${currentLineItem.targetPct}%` : '--'}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Second Row: Actuals & Actions */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-4 items-end bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                <div className={`lg:col-span-8 grid ${showTimeInput && showPctInput ? 'grid-cols-3' : 'grid-cols-2'} gap-4`}>
+                                    
+                                    {/* Actual Time (Shown if Target Time exists) */}
+                                    {showTimeInput && (
+                                        <div className="relative">
+                                            <label className="block text-xs font-bold text-osmak-600 uppercase mb-1">
+                                                Actual Time
+                                            </label>
+                                            <input 
+                                                type="number" 
+                                                className="w-full bg-white border border-gray-300 rounded shadow-inner text-lg font-bold text-gray-900 px-3 py-1 focus:ring-2 focus:ring-osmak-500 focus:border-osmak-500"
+                                                value={currentLineItem.actualTime ?? ''}
+                                                onChange={(e) => setCurrentLineItem({...currentLineItem, actualTime: parseFloat(e.target.value)})}
+                                                placeholder="0.00"
+                                            />
+                                            <span className="absolute right-3 top-8 text-gray-400 text-sm pointer-events-none">
+                                                {currentLineItem.timeUnit || 'Mins'}
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {/* Actual % (Shown if Target % exists, or as fallback) */}
+                                    {(showPctInput || fallbackShowPct) && (
+                                        <div className="relative">
+                                            <label className="block text-xs font-bold text-osmak-600 uppercase mb-1">
+                                                Actual %
+                                            </label>
+                                            <input 
+                                                type="number" 
+                                                className="w-full bg-white border border-gray-300 rounded shadow-inner text-lg font-bold text-gray-900 px-3 py-1 focus:ring-2 focus:ring-osmak-500 focus:border-osmak-500"
+                                                value={currentLineItem.actualPct ?? ''}
+                                                onChange={(e) => setCurrentLineItem({...currentLineItem, actualPct: parseFloat(e.target.value)})}
+                                                placeholder="0%"
+                                            />
+                                            <span className="absolute right-3 top-8 text-gray-400 text-sm pointer-events-none">
+                                                %
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {/* Remarks */}
+                                    <div className={!(showTimeInput && showPctInput) ? 'col-span-1' : ''}>
+                                         <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Remarks</label>
+                                         <input 
+                                            type="text" 
+                                            placeholder="Optional notes..." 
+                                            className="w-full text-sm border-gray-300 rounded text-gray-900 focus:ring-osmak-500 py-2"
+                                            value={currentLineItem.remarks || ''}
+                                            onChange={(e) => setCurrentLineItem({...currentLineItem, remarks: e.target.value})}
+                                         />
+                                     </div>
+                                </div>
+
+                                {/* Add Button */}
+                                <div className="lg:col-span-4">
+                                    {!isEditMode && (
+                                        <button 
+                                            onClick={addToBatch}
+                                            className="w-full bg-osmak-600 text-white py-2 rounded font-bold hover:bg-osmak-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                                        >
+                                            <CheckCircle className="w-5 h-5" /> Add to List
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 3. BATCH QUEUE LIST (Only Add Mode) */}
+                        {!isEditMode && batchQueue.length > 0 && (
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="text-sm font-bold text-gray-500 uppercase">Entries to Save ({batchQueue.length})</h4>
+                                    <button onClick={() => setBatchQueue([])} className="text-xs text-red-500 hover:underline">Clear All</button>
+                                </div>
+                                <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                                    <table className="min-w-full divide-y divide-gray-200">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">KPI</th>
+                                                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Census</th>
+                                                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Target</th>
+                                                <th className="px-3 py-2 text-left text-xs font-bold text-osmak-700 uppercase">Actual</th>
+                                                <th className="px-3 py-2 text-right"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="bg-white divide-y divide-gray-200">
+                                            {batchQueue.map((r, i) => (
+                                                <tr key={i}>
+                                                    <td className="px-3 py-2 text-sm text-gray-900">{r.kpiName} <span className="text-gray-400 text-xs">{r.department ? `(${r.department})` : ''}</span></td>
+                                                    <td className="px-3 py-2 text-sm text-gray-500">{r.census}</td>
+                                                    <td className="px-3 py-2 text-sm text-gray-500">{r.kpiType === 'TIME' ? `${r.targetTime} ${r.timeUnit}` : `${r.targetPct}%`}</td>
+                                                    <td className="px-3 py-2 text-sm font-bold text-gray-800">{r.kpiType === 'TIME' ? `${r.actualTime} ${r.timeUnit}` : `${r.actualPct}%`}</td>
+                                                    <td className="px-3 py-2 text-right">
+                                                        <button onClick={() => removeFromBatch(i)} className="text-red-500 hover:bg-red-50 p-1 rounded"><X className="w-4 h-4"/></button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {!isEditMode && batchQueue.length === 0 && (
+                             <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 flex items-start gap-3">
+                                 <AlertTriangle className="w-5 h-5 text-blue-400 mt-0.5" />
+                                 <p className="text-xs text-blue-700">
+                                     <strong>Tip:</strong> You can add multiple entries for the same section/month here. Just fill out the form and click "Add to List" repeatedly. 
+                                     The Target % is automatically locked based on the KPI Definition.
+                                 </p>
+                             </div>
+                        )}
+                    </div>
                 </div>
 
-                {/* Footer */}
-                <div className="bg-white p-6 border-t border-gray-200 flex justify-between items-center z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-                    <button
-                        type="button"
-                        onClick={() => setIsModalOpen(false)}
-                        className="text-gray-600 hover:text-gray-900 text-sm font-medium px-4 py-2 hover:bg-gray-100 rounded"
-                    >
-                        Cancel
-                    </button>
-                    <button
-                        type="button"
-                        onClick={isEditMode ? handleUpdateRecord : handleSaveBatch}
-                        disabled={loading || (!isEditMode && batchQueue.length === 0)}
-                        className={`inline-flex items-center justify-center py-2 px-8 border border-transparent shadow-md text-sm font-bold rounded-md text-white transition-all
-                            ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-osmak-600 hover:bg-osmak-700 hover:shadow-lg transform hover:-translate-y-0.5'}`}
-                    >
-                        {loading ? 'Saving...' : (isEditMode ? 'Update Record' : `Save ${batchQueue.length} Records`)}
-                    </button>
+                {/* Footer Action */}
+                <div className="bg-gray-50 px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+                    <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-200 rounded">Cancel</button>
+                    {(isEditMode || batchQueue.length > 0) && (
+                         <button 
+                            onClick={isEditMode ? handleUpdateRecord : handleSaveBatch}
+                            disabled={loading}
+                            className="px-6 py-2 bg-green-600 text-white font-bold rounded shadow hover:bg-green-700 transition-colors disabled:opacity-50"
+                        >
+                            {loading ? 'Processing...' : (isEditMode ? 'Update Record' : `Submit ${batchQueue.length} Entries`)}
+                        </button>
+                    )}
                 </div>
             </div>
         </div>

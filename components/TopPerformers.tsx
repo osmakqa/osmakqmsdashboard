@@ -37,7 +37,8 @@ const SectionDetailView = ({ section, onBack, records, dateFrom, dateTo }: { sec
     const worstKpi = performanceByKpi[performanceByKpi.length - 1];
 
     const heatmapData = useMemo(() => {
-        const months = Array.from(new Set(sectionRecords.map(r => r.month.slice(0, 7)))).sort();
+        // Explicitly typed as string[] to avoid 'unknown' index type error
+        const months: string[] = Array.from<string>(new Set(sectionRecords.map(r => r.month.slice(0, 7)))).sort();
         
         // Determine rows: KPIs or Departments if a KPI has multiple
         const rowLabels = new Set<string>();
@@ -55,12 +56,15 @@ const SectionDetailView = ({ section, onBack, records, dateFrom, dateTo }: { sec
             }
         });
 
-        const rows = Array.from(rowLabels).sort();
+        // Explicitly typed as string[]
+        const rows: string[] = Array.from<string>(rowLabels).sort();
         const grid: Record<string, Record<string, number | null>> = {};
 
         rows.forEach(row => {
             grid[row] = {};
-            months.forEach(month => grid[row][month] = null);
+            months.forEach(month => {
+                grid[row][month] = null;
+            });
         });
         
         sectionRecords.forEach(r => {

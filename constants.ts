@@ -1,3 +1,4 @@
+
 import { KPIRecord, SectionName, KPIDefinition } from './types';
 
 // Ospital ng Makati specific branding
@@ -125,9 +126,12 @@ export const KPI_DEFINITIONS: KPIDefinition[] = Object.values(SectionName).flatM
     documentNumber: `QAD-${section.substring(0,3).toUpperCase()}-001`,
     qualityObjective: "To ensure timely provision of services to patients and stakeholders.",
     kpiName: "Turnaround Time (TAT) Compliance",
+    department: "General Services", // New Field
+    kpiType: "PERCENTAGE", // New Field
     definition: "The percentage of transactions or services completed within the standard allocated time.",
     formula: "(Total number of transactions within TAT / Total number of transactions) x 100",
     target: "95% of transactions within TAT",
+    targetPct: 95, // Explicit Target
     responsible: "Section Head / Supervisor",
     schedule: "Monthly"
   });
@@ -140,9 +144,12 @@ export const KPI_DEFINITIONS: KPIDefinition[] = Object.values(SectionName).flatM
       documentNumber: `QAD-${section.substring(0,3).toUpperCase()}-002`,
       qualityObjective: "To ensure patient safety and minimize adverse events.",
       kpiName: "Patient Safety Incident Rate",
+      department: "Inpatient", // New Field
+      kpiType: "PERCENTAGE", // New Field
       definition: "Number of reported patient safety incidents (falls, medication errors) per 1000 patient days.",
       formula: "(Total number of incidents / Total patient days) x 1000",
       target: "Zero (0) Sentinel Events; < 2 incidents per 1000 days",
+      targetPct: 0,
       responsible: "Nurse Manager / Quality Officer",
       schedule: "Monthly"
     });
@@ -153,9 +160,12 @@ export const KPI_DEFINITIONS: KPIDefinition[] = Object.values(SectionName).flatM
         documentNumber: `QAD-${section.substring(0,3).toUpperCase()}-003`,
         qualityObjective: "To ensure patient safety and minimize adverse events.",
         kpiName: "Hospital Acquired Infection Rate",
+        department: "Inpatient",
+        kpiType: "PERCENTAGE",
         definition: "Percentage of patients who acquire an infection while admitted.",
         formula: "(Total HAI / Total Admissions) x 100",
         target: "< 1%",
+        targetPct: 1,
         responsible: "Infection Control Committee",
         schedule: "Monthly"
       });
@@ -166,12 +176,34 @@ export const KPI_DEFINITIONS: KPIDefinition[] = Object.values(SectionName).flatM
       documentNumber: `QAD-${section.substring(0,3).toUpperCase()}-004`,
       qualityObjective: "To maintain accuracy and integrity of patient records and transactions.",
       kpiName: "Data Accuracy Rate",
+      department: "Processing",
+      kpiType: "PERCENTAGE",
       definition: "Percentage of records/transactions free from clerical or data entry errors.",
       formula: "((Total Transactions - Total Errors) / Total Transactions) x 100",
       target: "99% Accuracy",
+      targetPct: 99,
       responsible: "Admin Officer",
       schedule: "Monthly"
     });
+    if (section === SectionName.ADMITTING) {
+        definitions.push({
+            id: `kpi-${section}-tat`,
+            section: section,
+            documentNumber: `QAD-${section.substring(0,3).toUpperCase()}-005`,
+            qualityObjective: "To ensure timely provision of services.",
+            kpiName: "Admission Turnaround Time",
+            definition: "Time from arrival to admission.",
+            department: "Front Desk",
+            kpiType: "TIME",
+            formula: "Time - Time",
+            target: "30 Mins / 90%",
+            targetPct: 90,
+            targetTime: 30,
+            timeUnit: "Mins",
+            responsible: "Admin Officer",
+            schedule: "Monthly"
+        });
+    }
   } else {
     definitions.push({
       id: `kpi-${section}-sat`,
@@ -179,9 +211,12 @@ export const KPI_DEFINITIONS: KPIDefinition[] = Object.values(SectionName).flatM
       documentNumber: `QAD-${section.substring(0,3).toUpperCase()}-005`,
       qualityObjective: "To provide satisfactory customer service.",
       kpiName: "Customer Satisfaction Rating",
+      department: "Client Relations",
+      kpiType: "PERCENTAGE",
       definition: "Average rating received from customer feedback forms.",
       formula: "Total Score / Total Number of Respondents",
       target: "Average Rating of 4.5/5 (Very Satisfactory)",
+      targetPct: 90, // Converted 4.5/5 to 90%
       responsible: "Section Head",
       schedule: "Monthly"
     });
