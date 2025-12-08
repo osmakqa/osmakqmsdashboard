@@ -89,7 +89,8 @@ export const dataService = {
       actualPct: Number(r.actualPct || r.ap) || 0,
       dueDate: (r.dueDate || r.dd) ? new Date(r.dueDate || r.dd).toISOString().slice(0, 10) : '',
       dateSubmitted: (r.dateSubmitted || r.ds) ? new Date(r.dateSubmitted || r.ds).toISOString().slice(0, 10) : '',
-      remarks: r.remarks || r.rem
+      remarks: r.remarks || r.rem,
+      status: r.status || 'APPROVED' // Default to APPROVED if missing
     }));
   },
 
@@ -206,7 +207,9 @@ export const dataService = {
   // Optimized to use passed records if available, otherwise fetch
   getSectionPerformance: async (section: SectionName, providedRecords?: KPIRecord[]): Promise<SectionPerformance> => {
     const allRecords = providedRecords || await dataService.getRecords();
-    const sectionRecords = allRecords.filter(r => r.section === section);
+    // IMPORTANT: Only calculate performance based on APPROVED records
+    const approvedRecords = allRecords.filter(r => r.status !== 'DRAFT');
+    const sectionRecords = approvedRecords.filter(r => r.section === section);
 
     if (sectionRecords.length === 0) return { section, status: PerformanceStatus.UNDEFINED, failureCount3Months: 0 };
 

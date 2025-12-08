@@ -1,10 +1,11 @@
+
 import React, { useState } from 'react';
 import { Lock, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLogin: () => void;
+  onLogin: (isMaster: boolean) => void;
   targetSection?: string; // Optional: If provided, validates against section-specific password
 }
 
@@ -20,33 +21,31 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin, targe
     setError('');
 
     let isValid = false;
-    const masterKey = 'osmak123';
+    let isMaster = false;
+    const masterKey = 'osmakqa123';
 
-    if (targetSection) {
+    if (password === masterKey) {
+        isValid = true;
+        isMaster = true;
+    } else if (targetSection) {
         // Section-specific password logic: First word of section name + "123"
-        // e.g. "Admitting Section" -> "admitting" -> "admitting123"
         const firstWord = targetSection.split(' ')[0].toLowerCase().trim();
         const sectionPassword = `${firstWord}123`;
         
-        // Allow either section password OR master admin key
-        if (password === sectionPassword || password === masterKey) {
+        if (password === sectionPassword) {
             isValid = true;
-        }
-    } else {
-        // Fallback for global actions (require master key)
-        if (password === masterKey) {
-            isValid = true;
+            isMaster = false;
         }
     }
 
     if (isValid) {
-        onLogin();
+        onLogin(isMaster);
         setPassword('');
     } else {
         // Provide hint only for usability in this specific internal app context
         const hint = targetSection 
             ? `Password for ${targetSection} (e.g., '${targetSection.split(' ')[0].toLowerCase()}123') or Admin Key.`
-            : "Invalid password. Please enter 'osmak123'";
+            : "Invalid password. Please enter 'osmakqa123'";
         setError(hint);
     }
   };
@@ -74,7 +73,7 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin, targe
                 </div>
                 <input
                     type={showPassword ? "text" : "password"}
-                    className={`w-full pl-10 pr-10 border rounded-md px-3 py-2 text-sm bg-gray-50 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-osmak-500'}`}
+                    className={`w-full pl-10 pr-10 border rounded-md px-3 py-2 text-sm bg-white text-gray-900 focus:outline-none focus:ring-2 ${error ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-osmak-500'}`}
                     placeholder="Enter password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}

@@ -48,6 +48,9 @@ export interface KPIRecord {
   dateSubmitted: string; // ISO Date
   
   remarks?: string;
+  
+  // Status for Draft vs Official
+  status?: 'DRAFT' | 'APPROVED';
 }
 
 export enum PerformanceStatus {

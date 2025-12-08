@@ -1,17 +1,19 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { KPIRecord, SectionName, KPIType, KPIDefinition } from '../types';
 import { dataService } from '../services/dataService';
-import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet, Calendar, Target, CheckCircle, AlertTriangle, Eraser, PenTool, Lock } from 'lucide-react';
+import { Download, Plus, Search, Edit2, ArrowUp, ArrowDown, X, Save, Trash2, ListPlus, Database, Info, Copy, Sheet, Calendar, Target, CheckCircle, AlertTriangle, Eraser, PenTool, Lock, FileCheck, CheckSquare, Loader } from 'lucide-react';
 import LoginModal from './LoginModal';
 import { GOOGLE_SHEET_URL } from '../constants';
 
 interface RecordsProps {
-  records: KPIRecord[];
+  records: KPIRecord[]; // Official/Approved records
+  drafts: KPIRecord[];  // Draft records from server
   definitions: KPIDefinition[];
   onRefresh: () => void;
 }
 
-const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) => {
+const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefresh }) => {
   
   // Filters
   const [filterSection, setFilterSection] = useState<string>('');
@@ -25,7 +27,8 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   // Auth state
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [pendingAction, setPendingAction] = useState<'add' | 'edit' | 'delete' | 'openSheet' | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false); // New state to track if logged in with master key
+  const [pendingAction, setPendingAction] = useState<'add' | 'edit' | 'delete' | 'openSheet' | 'approveAll' | 'checkEntries' | null>(null);
   const [pendingRecordId, setPendingRecordId] = useState<string | null>(null);
   
   // NEW: Section Selector State (Before Login)
@@ -37,14 +40,18 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   const [isEditMode, setIsEditMode] = useState(false);
   const [loading, setLoading] = useState(false);
   
+  // REVIEW / HOLD STATE
+  // "drafts" prop replaces local heldEntries state
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
+  const [editDraftId, setEditDraftId] = useState<string | null>(null);
+
   // ENTRY STATE
   const [selectedAddSection, setSelectedAddSection] = useState<string>(SectionName.ADMITTING);
-  // selectedAddMonth removed as global state, moved to currentLineItem
   
   // Current Line Item State
   const [currentLineItem, setCurrentLineItem] = useState<Partial<KPIRecord>>({});
   
-  // Batch Queue
+  // Batch Queue (Local before sending to server as Draft)
   const [batchQueue, setBatchQueue] = useState<KPIRecord[]>([]);
 
   // Filter Dropdown Options
@@ -108,6 +115,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
           kpiType: 'PERCENTAGE',
           dueDate: new Date().toISOString().slice(0, 10),
           dateSubmitted: new Date().toISOString().slice(0, 10),
+          status: 'DRAFT'
       });
   };
 
@@ -196,12 +204,12 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
 
   // When Modal Opens
   useEffect(() => {
-    if (isModalOpen && !isEditMode) {
+    if (isModalOpen && !isEditMode && editDraftId === null) {
         setBatchQueue([]);
         resetLineItem();
         // Section is already set via the pre-login selector
     }
-  }, [isModalOpen, isEditMode]);
+  }, [isModalOpen, isEditMode, editDraftId]);
 
 
   const requestSort = (key: string) => {
@@ -283,15 +291,8 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   };
 
   const onAddClick = () => {
-    if (!isAuthenticated) {
-      setPendingAction('add');
-      // Instead of going straight to login, ask for Section first
-      // This enables section-specific password validation
+      // Direct access to section selector
       setIsSectionSelectorOpen(true);
-    } else {
-      setIsEditMode(false);
-      setIsModalOpen(true);
-    }
   };
 
   const onEditClick = (record: KPIRecord) => {
@@ -302,6 +303,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
         setTargetSectionForLogin(record.section);
         setIsLoginOpen(true);
       } else {
+        setEditDraftId(null);
         setIsEditMode(true);
         // Ensure the record's month is set correctly for the input
         const recordMonth = record.month.slice(0, 7);
@@ -332,24 +334,160 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
     }
   };
 
+  // --- REVIEW / HELD ENTRY ACTIONS ---
+
+  const onEditHeld = (draftId: string) => {
+      const record = drafts.find(d => d.id === draftId);
+      if (!record) return;
+
+      setEditDraftId(draftId);
+      setIsEditMode(true);
+      setSelectedAddSection(record.section); // Ensure correct dropdown scope
+      const recordMonth = record.month.slice(0, 7);
+      setCurrentLineItem({...record, month: recordMonth});
+      setIsReviewOpen(false);
+      setIsModalOpen(true);
+  };
+
+  const onDeleteHeld = async (draftId: string) => {
+      if (window.confirm("Remove this entry from the review queue?")) {
+          setLoading(true);
+          try {
+              await dataService.deleteRecord(draftId);
+              setTimeout(() => {
+                  onRefresh();
+                  setLoading(false);
+              }, 1000);
+          } catch (e: any) {
+              alert('Delete failed: ' + (e.message || JSON.stringify(e)));
+              setLoading(false);
+          }
+      }
+  };
+
+  const handleQueueBatch = async () => {
+    // Moves local batch items to server as DRAFT
+    let entriesToQueue = [...batchQueue];
+    
+    // If batch is empty but user filled the form, auto-add current item
+    if (entriesToQueue.length === 0 && currentLineItem.kpiName && (currentLineItem.actualPct !== undefined || currentLineItem.actualTime !== undefined)) {
+        const newRecord: KPIRecord = {
+          id: `draft-${Date.now()}`,
+          section: selectedAddSection as SectionName,
+          month: `${currentLineItem.month}-01`, 
+          dueDate: currentLineItem.dueDate || new Date().toISOString().slice(0, 10),
+          dateSubmitted: new Date().toISOString().slice(0, 10),
+          kpiName: currentLineItem.kpiName,
+          department: currentLineItem.department || '',
+          kpiType: currentLineItem.kpiType || 'PERCENTAGE',
+          census: Number(currentLineItem.census) || 0,
+          targetPct: Number(currentLineItem.targetPct) || 0,
+          actualPct: Number(currentLineItem.actualPct) || 0,
+          targetTime: currentLineItem.targetTime ? Number(currentLineItem.targetTime) : undefined,
+          actualTime: currentLineItem.actualTime ? Number(currentLineItem.actualTime) : undefined,
+          timeUnit: currentLineItem.timeUnit || 'Mins',
+          remarks: currentLineItem.remarks,
+          status: 'DRAFT'
+        };
+        entriesToQueue.push(newRecord);
+    } else if (entriesToQueue.length === 0) {
+        alert("Please add entries to the list or fill out the form.");
+        return;
+    }
+
+    setLoading(true);
+    try {
+        const promises = entriesToQueue.map(record => {
+            const { id, ...payload } = record;
+            // Ensure status is DRAFT
+            return dataService.addRecord({ ...payload, status: 'DRAFT' } as any);
+        });
+        
+        await Promise.all(promises);
+        
+        setBatchQueue([]);
+        resetLineItem();
+        setIsModalOpen(false);
+        
+        // Refresh to fetch the new drafts
+        setTimeout(() => {
+            onRefresh();
+            setLoading(false);
+            alert(`${entriesToQueue.length} entries added to Review Queue (Saved to Cloud). Click "Check Entries" to finalize.`);
+        }, 1500);
+
+    } catch (e: any) {
+        console.error(e);
+        alert('Queue failed: ' + (e.message || JSON.stringify(e)));
+        setLoading(false);
+    }
+  };
+
+  const handleApproveAll = async () => {
+    // Strict Auth Check: Must be Admin to approve
+    if (!isAdmin) {
+        setPendingAction('approveAll');
+        setIsReviewOpen(false);
+        setTargetSectionForLogin(undefined); // Force admin login
+        setIsLoginOpen(true);
+        return;
+    }
+
+    if (drafts.length === 0) return;
+    
+    setLoading(true);
+    try {
+        const promises = drafts.map(record => {
+            const updatedRecord = { ...record, status: 'APPROVED' };
+            // Strip kpiType if needed, but dataService handles it mostly. 
+            // We use updateRecord to just flip the status
+            const { kpiType, ...payload } = updatedRecord;
+            return dataService.updateRecord(payload as any);
+        });
+        await Promise.all(promises);
+        
+        setTimeout(() => {
+             onRefresh();
+             setLoading(false);
+             setIsReviewOpen(false);
+             alert("All entries approved and published successfully!");
+        }, 1500);
+        
+    } catch (e: any) {
+          console.error(e);
+          alert('Save failed: ' + (e.message || JSON.stringify(e)));
+          setLoading(false);
+    }
+  };
+
+
   const handleSectionSelectionNext = () => {
-    // User picked a section in the intermediate modal
-    // Now open login, passing this section as the target
-    setTargetSectionForLogin(selectedAddSection);
+    // Force Login before allowing adding entries
     setIsSectionSelectorOpen(false);
+    
+    // Set target section for login validation (enforces section specific password)
+    setTargetSectionForLogin(selectedAddSection);
+    setPendingAction('add');
+    
     setIsLoginOpen(true);
   };
 
-  const handleLoginSuccess = async () => {
+  const handleLoginSuccess = async (isMasterLogin: boolean) => {
       setIsAuthenticated(true);
+      if (isMasterLogin) {
+          setIsAdmin(true);
+      }
       setIsLoginOpen(false);
       
       if (pendingAction === 'add') {
+          setEditDraftId(null);
           setIsEditMode(false);
+          // Note: selectedAddSection is preserved in state
           setIsModalOpen(true);
       } else if (pendingAction === 'edit' && pendingRecordId) {
           const record = records.find(r => r.id === pendingRecordId);
           if (record) {
+              setEditDraftId(null);
               setIsEditMode(true);
               const recordMonth = record.month.slice(0, 7);
               setCurrentLineItem({...record, month: recordMonth});
@@ -359,12 +497,15 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
           onDeleteClick(pendingRecordId);
       } else if (pendingAction === 'openSheet') {
         window.open(GOOGLE_SHEET_URL, '_blank');
+      } else if (pendingAction === 'approveAll') {
+          setIsReviewOpen(true);
+      } else if (pendingAction === 'checkEntries') {
+          setIsReviewOpen(true);
       }
 
       setPendingAction(null);
       setPendingRecordId(null);
-      // Keep targetSectionForLogin? Or clear it? 
-      // Clearing it might be safer for subsequent mixed actions
+      // We clear the target section to avoid sticking to a section context for future generic actions
       setTargetSectionForLogin(undefined);
   };
   
@@ -378,6 +519,17 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
     }
   };
 
+  const onCheckEntriesClick = () => {
+      // Require Admin access to check entries (as per requirement: password -> osmakqa123)
+      if (!isAdmin) {
+          setPendingAction('checkEntries');
+          // Check Entries allows viewing/approving, enforce Admin Login
+          setTargetSectionForLogin(undefined);
+          setIsLoginOpen(true);
+      } else {
+          setIsReviewOpen(true);
+      }
+  };
 
   const addToBatch = () => {
       // Validate
@@ -419,22 +571,20 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
           targetTime: currentLineItem.targetTime ? Number(currentLineItem.targetTime) : undefined,
           actualTime: currentLineItem.actualTime ? Number(currentLineItem.actualTime) : undefined,
           timeUnit: currentLineItem.timeUnit || 'Mins',
-          remarks: currentLineItem.remarks
+          remarks: currentLineItem.remarks,
+          status: 'DRAFT'
       };
 
       setBatchQueue([...batchQueue, newRecord]);
       // Reset line item but keep the Department and Month if user wants to add another for same dept/month
       setCurrentLineItem(prev => ({
           ...prev,
-          // Do not clear KPI name or Month here to allow rapid entry
-          // But clear values
           targetPct: undefined,
           actualPct: undefined,
           targetTime: undefined,
           actualTime: undefined,
           census: undefined
       }));
-      // Re-trigger select logic to refill target values for the kept KPI
       if (currentLineItem.kpiName) {
           handleKPISelect(currentLineItem.kpiName);
       }
@@ -446,35 +596,11 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       setBatchQueue(newQueue);
   };
 
-  const handleSaveBatch = async () => {
-      if (batchQueue.length === 0) return;
-
-      setLoading(true);
-      try {
-        const promises = batchQueue.map(record => {
-            // Exclude kpiType from payload so it doesn't overwrite the sheet column
-            // We use 'as any' to bypass the type check for the missing property in the internal service call
-            const { kpiType, ...payload } = record;
-            return dataService.addRecord(payload as any);
-        });
-        await Promise.all(promises);
-        
-        setTimeout(() => {
-             onRefresh();
-             setLoading(false);
-             setIsModalOpen(false);
-             setBatchQueue([]);
-        }, 1500);
-        
-      } catch (e: any) {
-          console.error(e);
-          alert('Save failed: ' + (e.message || JSON.stringify(e)));
-          setLoading(false);
-      }
-  };
-
   const handleUpdateRecord = async (e: React.FormEvent) => {
       e.preventDefault();
+      
+      // Case 1: Editing a Draft or Official Record
+      // We rely on currentLineItem.id and status
       if (currentLineItem.id) {
         setLoading(true);
         try {
@@ -487,10 +613,17 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
             const { kpiType, ...payload } = updatedRecord;
             
             await dataService.updateRecord(payload as any);
+            
             setTimeout(() => {
                 onRefresh();
                 setLoading(false);
                 setIsModalOpen(false);
+                
+                // If it was a draft being edited from Review Screen, re-open Review Screen
+                if (editDraftId) {
+                    setEditDraftId(null);
+                    setIsReviewOpen(true);
+                }
             }, 1000);
         } catch (e: any) {
             console.error(e);
@@ -508,7 +641,6 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
   // Visibility logic for Inputs
   const showTimeInput = currentLineItem.targetTime !== undefined && currentLineItem.targetTime !== null;
   const showPctInput = currentLineItem.targetPct !== undefined && currentLineItem.targetPct !== null;
-  // If neither defined yet (e.g. new KPI), default to Pct or allow generic choice? Defaulting to Pct for simplicity until definition found
   const fallbackShowPct = !showTimeInput && !showPctInput;
 
   return (
@@ -517,7 +649,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       <div className="flex flex-wrap justify-between items-center gap-4 bg-white p-4 rounded-lg shadow-sm border border-gray-100">
         <div className="flex flex-wrap gap-2 w-full flex-1">
           <select 
-            className="border rounded-md px-3 py-2 text-sm bg-white focus:ring-osmak-500 focus:border-osmak-500 min-w-[200px]"
+            className="border rounded-md px-3 py-2 text-sm bg-white text-gray-900 focus:ring-osmak-500 focus:border-osmak-500 min-w-[200px]"
             value={filterSection}
             onChange={(e) => {
                 setFilterSection(e.target.value);
@@ -532,7 +664,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
           {filterSection && (
             <>
                 <select 
-                    className="border rounded-md px-3 py-2 text-sm bg-white focus:ring-osmak-500 focus:border-osmak-500 min-w-[150px]"
+                    className="border rounded-md px-3 py-2 text-sm bg-white text-gray-900 focus:ring-osmak-500 focus:border-osmak-500 min-w-[150px]"
                     value={filterKPI}
                     onChange={(e) => setFilterKPI(e.target.value)}
                 >
@@ -541,7 +673,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                 </select>
 
                  <select 
-                    className="border rounded-md px-3 py-2 text-sm bg-white focus:ring-osmak-500 focus:border-osmak-500 min-w-[150px]"
+                    className="border rounded-md px-3 py-2 text-sm bg-white text-gray-900 focus:ring-osmak-500 focus:border-osmak-500 min-w-[150px]"
                     value={filterDept}
                     onChange={(e) => setFilterDept(e.target.value)}
                 >
@@ -556,7 +688,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
             <input 
               type="text" 
               placeholder="Search..." 
-              className="w-full pl-9 pr-3 py-2 border rounded-md text-sm focus:ring-osmak-500 focus:border-osmak-500 bg-white"
+              className="w-full pl-9 pr-3 py-2 border rounded-md text-sm focus:ring-osmak-500 focus:border-osmak-500 bg-white text-gray-900"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -564,6 +696,20 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
         </div>
 
         <div className="flex gap-2">
+           {/* Check Entries Button */}
+           <button 
+              onClick={onCheckEntriesClick}
+              className="relative flex items-center gap-2 bg-indigo-50 text-indigo-700 px-4 py-2 rounded-md text-sm hover:bg-indigo-100 transition-colors border border-indigo-200"
+            >
+             <FileCheck className="w-4 h-4" />
+             Check Entries
+             {drafts.length > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center shadow-sm">
+                    {drafts.length}
+                </span>
+             )}
+           </button>
+
            <button onClick={handleOpenSheetClick} className="flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-md text-sm hover:bg-green-200 transition-colors whitespace-nowrap">
             <Sheet className="w-4 h-4" />
             Open Sheet
@@ -582,7 +728,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
       {/* Main Table Container */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         <div className="px-6 py-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">KPI Records Database</h3>
+            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">KPI Records Database (Official)</h3>
             <span className="text-xs font-semibold text-osmak-700 bg-osmak-50 px-2 py-1 rounded-full border border-osmak-100">
                 Visible Records: {filteredRecords.length}
             </span>
@@ -671,7 +817,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
         targetSection={targetSectionForLogin}
       />
 
-      {/* SECTION SELECTOR MODAL (Pre-Login) */}
+      {/* SECTION SELECTOR MODAL (Pre-Login/Staging) */}
       {isSectionSelectorOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4 backdrop-blur-sm animate-fade-in">
              <div className="bg-white rounded-lg p-6 w-96 shadow-xl">
@@ -687,7 +833,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                      <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Section / Unit</label>
                         <select 
-                            className="w-full border-gray-300 rounded-md shadow-sm focus:ring-osmak-500 focus:border-osmak-500 py-2.5 text-sm font-medium"
+                            className="w-full border-gray-300 rounded-md shadow-sm focus:ring-osmak-500 focus:border-osmak-500 py-2.5 text-sm font-medium bg-white text-gray-900"
                             value={selectedAddSection}
                             onChange={(e) => setSelectedAddSection(e.target.value)}
                         >
@@ -713,6 +859,101 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
         </div>
       )}
 
+      {/* REVIEW / CHECK ENTRIES MODAL */}
+      {isReviewOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[70] p-4 backdrop-blur-sm animate-fade-in">
+             <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+                <div className="px-6 py-4 border-b border-gray-100 bg-osmak-50 flex justify-between items-center">
+                    <div>
+                        <h3 className="text-xl font-bold text-osmak-800 flex items-center gap-2">
+                            <FileCheck className="w-6 h-6"/> Check Entries
+                        </h3>
+                        <p className="text-sm text-osmak-600">Review, edit, or delete entries before final approval. (Fetched from Cloud)</p>
+                    </div>
+                    <button onClick={() => setIsReviewOpen(false)} className="text-gray-400 hover:text-gray-600"><X className="w-6 h-6"/></button>
+                </div>
+                
+                <div className="flex-1 overflow-auto p-6 bg-gray-50/50">
+                    {loading && (
+                        <div className="flex justify-center py-10">
+                            <Loader className="w-8 h-8 text-osmak-500 animate-spin" />
+                        </div>
+                    )}
+                    
+                    {!loading && drafts.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                            <CheckSquare className="w-16 h-16 mb-4 opacity-20" />
+                            <p className="text-lg font-medium">Review Queue is Empty</p>
+                            <p className="text-sm">Add entries via "Add Entry" and click "Queue for Review".</p>
+                        </div>
+                    ) : !loading && (
+                        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
+                             <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Section / Dept</th>
+                                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Month / KPI</th>
+                                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Census</th>
+                                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Actual Perf</th>
+                                        <th className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200">
+                                    {drafts.map((record, idx) => (
+                                        <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                            <td className="px-4 py-3">
+                                                <div className="text-sm font-medium text-gray-900">{record.section}</div>
+                                                <div className="text-xs text-gray-500">{record.department || '-'}</div>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <div className="text-sm font-medium text-gray-900">{record.month}</div>
+                                                <div className="text-xs text-gray-500 truncate max-w-[200px]" title={record.kpiName}>{record.kpiName}</div>
+                                            </td>
+                                            <td className="px-4 py-3 text-sm text-gray-600">{record.census}</td>
+                                            <td className="px-4 py-3">
+                                                <span className={`inline-flex px-2 py-1 rounded-md text-xs font-bold ${dataService.isConformant(record) ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                                    {record.kpiType === 'TIME' ? `${record.actualTime} ${record.timeUnit}` : `${record.actualPct}%`}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-right">
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <button onClick={() => onEditHeld(record.id)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded"><Edit2 className="w-4 h-4"/></button>
+                                                    <button onClick={() => onDeleteHeld(record.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                             </table>
+                        </div>
+                    )}
+                </div>
+
+                <div className="bg-white border-t border-gray-200 p-4 flex justify-between items-center">
+                    <span className="text-sm text-gray-500">
+                        {drafts.length} entries waiting for approval.
+                    </span>
+                    <div className="flex gap-3">
+                         <button 
+                            onClick={() => setIsReviewOpen(false)}
+                            className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md text-sm font-medium"
+                         >
+                             Keep Editing
+                         </button>
+                         <button 
+                            onClick={handleApproveAll}
+                            disabled={loading || drafts.length === 0}
+                            className="flex items-center gap-2 px-6 py-2 bg-osmak-600 text-white hover:bg-osmak-700 rounded-md text-sm font-bold shadow-md disabled:opacity-50 disabled:shadow-none transition-all"
+                         >
+                             {loading ? <Loader className="w-4 h-4 animate-spin"/> : <CheckCircle className="w-4 h-4"/>}
+                             Approve & Save All
+                         </button>
+                    </div>
+                </div>
+             </div>
+        </div>
+      )}
+
       {/* ADD / EDIT MODAL */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-fade-in">
@@ -723,13 +964,16 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                     <div>
                         <h3 className="text-xl font-bold text-osmak-800 flex items-center gap-2">
                             {isEditMode ? <Edit2 className="w-6 h-6"/> : <ListPlus className="w-6 h-6"/>}
-                            {isEditMode ? 'Edit Record' : 'Add KPI Records'}
+                            {isEditMode ? (editDraftId !== null ? 'Edit Queue Entry' : 'Edit Record') : 'Add KPI Records'}
                         </h3>
                         <p className="text-sm text-osmak-600">
-                            {isEditMode ? 'Modify an existing record' : 'Submit multiple monthly reports for a section'}
+                            {isEditMode ? 'Modify record details' : 'Submit multiple monthly reports for a section'}
                         </p>
                     </div>
-                    <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full p-2"><X className="w-6 h-6"/></button>
+                    <button onClick={() => {
+                        setIsModalOpen(false);
+                        if(editDraftId !== null) { setEditDraftId(null); setIsReviewOpen(true); }
+                    }} className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full p-2"><X className="w-6 h-6"/></button>
                 </div>
 
                 {/* Content */}
@@ -743,7 +987,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                 {isEditMode ? (
                                     <p className="font-bold text-osmak-800">{currentLineItem.section}</p>
                                 ) : (
-                                    // Locked dropdown since we selected it pre-login, but functionally it's a select
+                                    // Locked dropdown since we selected it pre-login/pre-modal, but functionally it's a select
                                     <div className="flex items-center justify-between">
                                         <p className="font-bold text-osmak-800 text-lg">{selectedAddSection}</p>
                                         <button 
@@ -782,7 +1026,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                             <input type="text" disabled value={currentLineItem.kpiName} className="w-full bg-gray-100 border-gray-300 rounded text-gray-500 cursor-not-allowed"/>
                                         ) : (
                                             <select 
-                                                className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-medium"
+                                                className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-medium bg-white"
                                                 value={currentLineItem.kpiName}
                                                 onChange={(e) => handleKPISelect(e.target.value)}
                                             >
@@ -799,7 +1043,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                             <input 
                                                 type="text" 
                                                 list="dept-options"
-                                                className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900"
+                                                className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 bg-white"
                                                 value={currentLineItem.department}
                                                 onChange={(e) => setCurrentLineItem({...currentLineItem, department: e.target.value})}
                                                 placeholder="e.g. ICU"
@@ -815,7 +1059,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                         <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Reporting Month</label>
                                         <input 
                                             type="month" 
-                                            className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900"
+                                            className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 bg-white"
                                             value={currentLineItem.month}
                                             onChange={(e) => setCurrentLineItem({...currentLineItem, month: e.target.value})}
                                         />
@@ -864,7 +1108,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                                 <label className="block text-[10px] font-bold text-blue-700 uppercase mb-1">Total Census</label>
                                                 <input 
                                                     type="number" 
-                                                    className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-semibold"
+                                                    className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-semibold bg-white"
                                                     value={currentLineItem.census ?? ''}
                                                     onChange={(e) => setCurrentLineItem({...currentLineItem, census: Number(e.target.value)})}
                                                     placeholder="0"
@@ -878,7 +1122,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                                     <input 
                                                         type="number" 
                                                         disabled={!showTimeInput}
-                                                        className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-bold"
+                                                        className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-bold bg-white"
                                                         value={currentLineItem.actualTime ?? ''}
                                                         onChange={(e) => setCurrentLineItem({...currentLineItem, actualTime: parseFloat(e.target.value)})}
                                                     />
@@ -895,7 +1139,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                                     <input 
                                                         type="number" 
                                                         disabled={!showPctInput && !fallbackShowPct}
-                                                        className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-bold"
+                                                        className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 font-bold bg-white"
                                                         value={currentLineItem.actualPct ?? ''}
                                                         onChange={(e) => setCurrentLineItem({...currentLineItem, actualPct: parseFloat(e.target.value)})}
                                                     />
@@ -913,7 +1157,7 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
                                          <input 
                                             type="text" 
                                             placeholder="Optional notes..." 
-                                            className="w-full text-sm border-gray-300 rounded text-gray-900 focus:ring-osmak-500 py-2"
+                                            className="w-full text-sm border-gray-300 rounded text-gray-900 focus:ring-osmak-500 py-2 bg-white"
                                             value={currentLineItem.remarks || ''}
                                             onChange={(e) => setCurrentLineItem({...currentLineItem, remarks: e.target.value})}
                                          />
@@ -983,14 +1227,22 @@ const Records: React.FC<RecordsProps> = ({ records, definitions, onRefresh }) =>
 
                 {/* Footer Action */}
                 <div className="bg-gray-50 px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
-                    <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-200 rounded">Cancel</button>
-                    {(isEditMode || batchQueue.length > 0) && (
+                    <button onClick={() => {
+                        setIsModalOpen(false);
+                        if(editDraftId !== null) { setEditDraftId(null); setIsReviewOpen(true); }
+                    }} className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-200 rounded">Cancel</button>
+                    {(isEditMode || batchQueue.length > 0 || currentLineItem.kpiName) && (
                          <button 
-                            onClick={isEditMode ? handleUpdateRecord : handleSaveBatch}
+                            onClick={isEditMode ? handleUpdateRecord : handleQueueBatch}
                             disabled={loading}
-                            className="px-6 py-2 bg-green-600 text-white font-bold rounded shadow hover:bg-green-700 transition-colors disabled:opacity-50"
+                            className={`px-6 py-2 text-white font-bold rounded shadow transition-colors disabled:opacity-50 flex items-center gap-2 ${isEditMode ? 'bg-green-600 hover:bg-green-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}
                         >
-                            {loading ? 'Processing...' : (isEditMode ? 'Update Record' : `Submit ${batchQueue.length} Entries`)}
+                            {loading ? 'Processing...' : (isEditMode ? 'Update Record' : (
+                                <>
+                                   <FileCheck className="w-4 h-4" />
+                                   {batchQueue.length > 0 ? `Queue ${batchQueue.length} Entries for Review` : 'Queue Entry for Review'}
+                                </>
+                            ))}
                         </button>
                     )}
                 </div>

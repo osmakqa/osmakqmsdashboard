@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Navbar from './components/Navbar';
 import KPITrend from './components/KPITrend';
 import TopPerformers from './components/TopPerformers';
@@ -45,6 +45,12 @@ const App: React.FC = () => {
     loadData(true);
   };
 
+  // Filter records: Dashboard views should only see APPROVED records
+  const approvedRecords = useMemo(() => records.filter(r => r.status !== 'DRAFT'), [records]);
+  
+  // Draft records for the Review Queue
+  const draftRecords = useMemo(() => records.filter(r => r.status === 'DRAFT'), [records]);
+
   const renderView = () => {
     if (loading && records.length === 0) {
       return (
@@ -57,19 +63,19 @@ const App: React.FC = () => {
 
     switch (currentView) {
       case 'trend':
-        return <KPITrend records={records} />;
+        return <KPITrend records={approvedRecords} />;
       case 'performers':
-        return <TopPerformers records={records} />;
+        return <TopPerformers records={approvedRecords} />;
       case 'records':
-        return <Records records={records} definitions={definitions} onRefresh={refreshData} />;
+        return <Records records={approvedRecords} drafts={draftRecords} definitions={definitions} onRefresh={refreshData} />;
       case 'nonsub':
-        return <NonSubmission records={records} />;
+        return <NonSubmission records={approvedRecords} />;
       case 'reports':
-        return <Reports records={records} definitions={definitions} />;
+        return <Reports records={approvedRecords} definitions={definitions} />;
       case 'kpi_definitions':
         return <KPIDetails definitions={definitions} />;
       default:
-        return <KPITrend records={records} />;
+        return <KPITrend records={approvedRecords} />;
     }
   };
 
