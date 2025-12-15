@@ -325,16 +325,14 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
       }
 
       if (activeModal === 'census') {
-          // Find Highs and Lows
           const sortedByCensus = [...displayedData].sort((a,b) => (b.census || 0) - (a.census || 0));
-          const top3 = sortedByCensus.slice(0, 3);
           const minCensus = sortedByCensus[sortedByCensus.length - 1]?.census || 0;
           const maxCensus = sortedByCensus[0]?.census || 0;
 
           return (
               <>
                 <h3 className="text-lg font-bold text-gray-800 mb-1">Census Analysis</h3>
-                <p className="text-sm text-gray-500 mb-6">Patient volume distribution and peak periods.</p>
+                <p className="text-sm text-gray-500 mb-6">Patient volume distribution for the selected date range.</p>
                 
                 <div className="grid grid-cols-3 gap-4 mb-6">
                     <div className="bg-indigo-50 p-3 rounded-lg text-center">
@@ -342,18 +340,18 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                         <p className="text-xl font-bold text-indigo-900">{metrics.totalCensus}</p>
                     </div>
                     <div className="bg-gray-50 p-3 rounded-lg text-center">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Min Daily/Mo</p>
+                        <p className="text-xs text-gray-500 uppercase font-bold">Min</p>
                         <p className="text-xl font-bold text-gray-700">{minCensus}</p>
                     </div>
                     <div className="bg-gray-50 p-3 rounded-lg text-center">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Max Daily/Mo</p>
+                        <p className="text-xs text-gray-500 uppercase font-bold">Max</p>
                         <p className="text-xl font-bold text-gray-700">{maxCensus}</p>
                     </div>
                 </div>
 
-                <h4 className="text-sm font-bold text-gray-700 mb-2">Busiest Recorded {aggregationPeriod === 'quarterly' ? 'Quarters' : 'Months'}</h4>
-                <div className="space-y-2">
-                    {top3.map((r, idx) => (
+                <h4 className="text-sm font-bold text-gray-700 mb-2">Detailed Census ({aggregationPeriod === 'quarterly' ? 'Quarters' : 'Months'})</h4>
+                <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                    {displayedData.map((r, idx) => (
                         <div key={idx} className="flex justify-between items-center p-3 border border-gray-100 rounded-lg hover:bg-gray-50">
                             <span className="text-sm font-medium text-gray-600">
                                 {aggregationPeriod === 'quarterly' 
@@ -517,46 +515,47 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
             </div>
         </div>
 
-        <div className="space-y-1 flex-1 min-w-[250px]">
-            <label className="text-xs font-semibold text-gray-500 uppercase">View Options</label>
-            <div className="flex items-center gap-4 h-10">
-                 <div className="flex bg-gray-100 rounded-md p-1">
+        <div className="flex flex-wrap gap-4 flex-1">
+             <div className="space-y-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase">View Options</label>
+                <div className="flex items-center gap-4 h-10">
+                     <div className="flex bg-gray-100 rounded-md p-1">
+                        <button
+                        onClick={() => setViewMode('percent')}
+                        className={`px-3 py-1 text-xs rounded-sm transition-all ${viewMode === 'percent' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                        >
+                        % Perf
+                        </button>
+                        <button
+                        onClick={() => setViewMode('time')}
+                        className={`px-3 py-1 text-xs rounded-sm transition-all ${viewMode === 'time' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                        >
+                        Time/Day
+                        </button>
+                    </div>
+                    <label className="inline-flex items-center cursor-pointer whitespace-nowrap">
+                        <input type="checkbox" checked={showCensus} onChange={(e) => setShowCensus(e.target.checked)} className="form-checkbox h-4 w-4 text-osmak-600 rounded" />
+                        <span className="ml-2 text-xs text-gray-700 font-medium">Census</span>
+                    </label>
+                </div>
+            </div>
+            
+            <div className="space-y-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase">Aggregation</label>
+                <div className="flex bg-gray-100 rounded-md p-1 h-10">
                     <button
-                    onClick={() => setViewMode('percent')}
-                    className={`px-3 py-1 text-xs rounded-sm transition-all ${viewMode === 'percent' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                        onClick={() => setAggregationPeriod('monthly')}
+                        className={`px-3 py-1 text-xs rounded-sm transition-all ${aggregationPeriod === 'monthly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
                     >
-                    % Perf
+                        Monthly
                     </button>
                     <button
-                    onClick={() => setViewMode('time')}
-                    className={`px-3 py-1 text-xs rounded-sm transition-all ${viewMode === 'time' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                        onClick={() => setAggregationPeriod('quarterly')}
+                        className={`px-3 py-1 text-xs rounded-sm transition-all ${aggregationPeriod === 'quarterly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
                     >
-                    Time/Day
+                        Quarterly
                     </button>
                 </div>
-                <label className="inline-flex items-center cursor-pointer whitespace-nowrap">
-                    <input type="checkbox" checked={showCensus} onChange={(e) => setShowCensus(e.target.checked)} className="form-checkbox h-4 w-4 text-osmak-600 rounded" />
-                    <span className="ml-2 text-xs text-gray-700 font-medium">Census</span>
-                </label>
-            </div>
-        </div>
-        
-        {/* NEW: Aggregation Period Selector */}
-        <div className="space-y-1 flex-1 min-w-[150px]">
-            <label className="text-xs font-semibold text-gray-500 uppercase">Aggregation</label>
-            <div className="flex bg-gray-100 rounded-md p-1 h-10">
-                <button
-                    onClick={() => setAggregationPeriod('monthly')}
-                    className={`px-3 py-1 text-xs rounded-sm transition-all ${aggregationPeriod === 'monthly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
-                >
-                    Monthly
-                </button>
-                <button
-                    onClick={() => setAggregationPeriod('quarterly')}
-                    className={`px-3 py-1 text-xs rounded-sm transition-all ${aggregationPeriod === 'quarterly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
-                >
-                    Quarterly
-                </button>
             </div>
         </div>
       </div>

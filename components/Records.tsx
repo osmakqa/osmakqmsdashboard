@@ -797,46 +797,59 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
 
         <div className="flex gap-2">
             {/* NEW: View Period Selector */}
-            <div className="flex bg-gray-100 rounded-md p-1">
-                <button
-                    onClick={() => setViewPeriod('monthly')}
-                    className={`px-3 py-1 text-xs rounded-sm transition-all ${viewPeriod === 'monthly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
-                >
-                    Monthly
-                </button>
-                <button
-                    onClick={() => setViewPeriod('quarterly')}
-                    className={`px-3 py-1 text-xs rounded-sm transition-all ${viewPeriod === 'quarterly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
-                >
-                    Quarterly
-                </button>
+            <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase block">AGGREGATION</label>
+                <div className="flex bg-gray-100 rounded-md p-1 h-9 items-center">
+                    <button
+                        onClick={() => setViewPeriod('monthly')}
+                        className={`px-3 py-1 text-xs rounded-sm transition-all h-full ${viewPeriod === 'monthly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                    >
+                        Monthly
+                    </button>
+                    <button
+                        onClick={() => setViewPeriod('quarterly')}
+                        className={`px-3 py-1 text-xs rounded-sm transition-all h-full ${viewPeriod === 'quarterly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                    >
+                        Quarterly
+                    </button>
+                </div>
             </div>
            {/* Check Entries Button */}
-           <button 
-              onClick={onCheckEntriesClick}
-              className="relative flex items-center gap-2 bg-indigo-50 text-indigo-700 px-4 py-2 rounded-md text-sm hover:bg-indigo-100 transition-colors border border-indigo-200"
-            >
-             <FileCheck className="w-4 h-4" />
-             Check Entries
-             {drafts.length > 0 && (
-                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center shadow-sm">
-                    {drafts.length}
-                </span>
-             )}
-           </button>
+           <div className="flex items-end">
+               <button 
+                  onClick={onCheckEntriesClick}
+                  className="relative flex items-center gap-2 bg-indigo-50 text-indigo-700 px-4 py-2 rounded-md text-sm hover:bg-indigo-100 transition-colors border border-indigo-200 h-9"
+                >
+                 <FileCheck className="w-4 h-4" />
+                 Check Entries
+                 {drafts.length > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center shadow-sm">
+                        {drafts.length}
+                    </span>
+                 )}
+               </button>
+           </div>
 
-           <button onClick={handleOpenSheetClick} className="flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-md text-sm hover:bg-green-200 transition-colors whitespace-nowrap">
-            <Sheet className="w-4 h-4" />
-            Open Sheet
-          </button>
-          <button disabled={loading} onClick={onAddClick} className="flex items-center gap-2 bg-osmak-600 text-white px-4 py-2 rounded-md text-sm hover:bg-osmak-700 transition-colors disabled:opacity-50 whitespace-nowrap">
-            <Plus className="w-4 h-4" />
-            Add Entry
-          </button>
-          <button onClick={handleExport} className="flex items-center gap-2 bg-gray-100 text-gray-700 px-4 py-2 rounded-md text-sm hover:bg-gray-200 transition-colors whitespace-nowrap">
-            <Download className="w-4 h-4" />
-            Export CSV
-          </button>
+           <div className="flex items-end">
+                <button onClick={handleOpenSheetClick} className="flex items-center gap-2 bg-green-100 text-green-800 px-4 py-2 rounded-md text-sm hover:bg-green-200 transition-colors whitespace-nowrap h-9">
+                    <Sheet className="w-4 h-4" />
+                    Open Sheet
+                </button>
+           </div>
+          
+           <div className="flex items-end">
+                <button disabled={loading} onClick={onAddClick} className="flex items-center gap-2 bg-osmak-600 text-white px-4 py-2 rounded-md text-sm hover:bg-osmak-700 transition-colors disabled:opacity-50 whitespace-nowrap h-9">
+                    <Plus className="w-4 h-4" />
+                    Add Entry
+                </button>
+           </div>
+           
+           <div className="flex items-end">
+                <button onClick={handleExport} className="flex items-center gap-2 bg-gray-100 text-gray-700 px-4 py-2 rounded-md text-sm hover:bg-gray-200 transition-colors whitespace-nowrap h-9">
+                    <Download className="w-4 h-4" />
+                    Export CSV
+                </button>
+           </div>
         </div>
       </div>
 
