@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   ComposedChart,
@@ -22,41 +23,72 @@ interface KPITrendProps {
   records: KPIRecord[];
 }
 
-// Simple Circular Gauge Component
-const CircularGauge = ({ value, color }: { value: number; color: string }) => {
-  const radius = 30;
-  const stroke = 8;
-  const normalizedRadius = radius - stroke * 2;
-  const circumference = normalizedRadius * 2 * Math.PI;
-  const strokeDashoffset = circumference - (value / 100) * circumference;
+// Helper to aggregate records by quarter
+const aggregateRecordsByQuarter = (records: KPIRecord[]): KPIRecord[] => {
+  const grouped: { [key: string]: KPIRecord[] } = {};
 
-  return (
-    <div className="relative flex items-center justify-center">
-      <svg height={radius * 2} width={radius * 2} className="rotate-[-90deg]">
-        <circle
-          stroke="#e5e7eb"
-          strokeWidth={stroke}
-          fill="transparent"
-          r={normalizedRadius}
-          cx={radius}
-          cy={radius}
-        />
-        <circle
-          stroke={color}
-          fill="transparent"
-          strokeWidth={stroke}
-          strokeDasharray={circumference + ' ' + circumference}
-          style={{ strokeDashoffset, transition: 'stroke-dashoffset 0.5s ease-in-out' }}
-          strokeLinecap="round"
-          r={normalizedRadius}
-          cx={radius}
-          cy={radius}
-        />
-      </svg>
-      <span className="absolute text-xs font-bold text-gray-700">{Math.round(value)}%</span>
-    </div>
-  );
+  records.forEach(record => {
+    const date = new Date(record.month);
+    const year = date.getFullYear();
+    const quarter = Math.floor(date.getMonth() / 3) + 1; // 1 to 4
+    const quarterKey = `${year}-Q${quarter}`;
+
+    if (!grouped[quarterKey]) {
+      grouped[quarterKey] = [];
+    }
+    grouped[quarterKey].push(record);
+  });
+
+  return Object.keys(grouped).map(quarterKey => {
+    const quarterRecords = grouped[quarterKey];
+    
+    // Use the first record as a template for non-numerical fields
+    const templateRecord = quarterRecords[0];
+    const dateParts = quarterKey.split('-Q'); // ["YYYY", "Q"]
+    const year = parseInt(dateParts[0]);
+    const quarterNum = parseInt(dateParts[1]);
+    const firstMonthOfQuarter = new Date(year, (quarterNum - 1) * 3, 1).toISOString().slice(0, 10);
+
+    // Aggregate numerical values
+    let totalCensus = 0;
+    let sumTargetTime = 0;
+    let sumActualTime = 0;
+    let sumTargetPct = 0;
+    let sumActualPct = 0;
+    let countTime = 0;
+    let countPct = 0;
+
+    quarterRecords.forEach(r => {
+      totalCensus += r.census || 0;
+      if (r.kpiType === 'TIME') {
+        sumTargetTime += r.targetTime || 0;
+        sumActualTime += r.actualTime || 0;
+        countTime++;
+      } else { // PERCENTAGE
+        sumTargetPct += r.targetPct || 0;
+        sumActualPct += r.actualPct || 0;
+        countPct++;
+      }
+    });
+
+    // Determine conformance based on the average
+    const aggregatedRecord: KPIRecord = {
+      ...templateRecord,
+      id: `agg-${quarterKey}-${templateRecord.section}-${templateRecord.kpiName}-${templateRecord.department || 'na'}`,
+      month: firstMonthOfQuarter,
+      census: totalCensus,
+      targetTime: countTime > 0 ? sumTargetTime / countTime : undefined,
+      actualTime: countTime > 0 ? sumActualTime / countTime : undefined,
+      targetPct: countPct > 0 ? sumTargetPct / countPct : 0, // Default 0 for percentage if no records
+      actualPct: countPct > 0 ? sumActualPct / countPct : 0, // Default 0 for percentage if no records
+      remarks: `Aggregated for ${quarterKey}`,
+      status: 'APPROVED', // Assuming input records are approved.
+      // Retain timeUnit and kpiType from template, assuming consistency.
+    };
+    return aggregatedRecord;
+  }).sort((a, b) => new Date(a.month).getTime() - new Date(b.month).getTime()); // Sort aggregated data
 };
+
 
 const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
   // Filters
@@ -65,6 +97,7 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
   const [selectedDept, setSelectedDept] = useState<string>('All');
   const [showCensus, setShowCensus] = useState(true);
   const [viewMode, setViewMode] = useState<'percent' | 'time'>('percent');
+  const [aggregationPeriod, setAggregationPeriod] = useState<'monthly' | 'quarterly'>('monthly'); // New state
   
   // Date Filters
   const [dateFrom, setDateFrom] = useState('2023-01-01');
@@ -101,7 +134,7 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
     setSelectedDept('All');
   }, [selectedKPI]);
 
-  const filteredData = useMemo(() => {
+  const filteredMonthlyData = useMemo(() => {
     return records
       .filter(r => 
         r.section === selectedSection &&
@@ -113,46 +146,54 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
       .sort((a, b) => new Date(a.month).getTime() - new Date(b.month).getTime());
   }, [records, selectedSection, selectedKPI, selectedDept, dateFrom, dateTo]);
 
+  const displayedData = useMemo(() => {
+      if (aggregationPeriod === 'quarterly') {
+          return aggregateRecordsByQuarter(filteredMonthlyData);
+      }
+      return filteredMonthlyData;
+  }, [filteredMonthlyData, aggregationPeriod]);
+
+
   // Update analysis when filtered data changes
   useEffect(() => {
     const kpiLabel = selectedKPI !== 'All' ? selectedKPI : "General Operational KPI";
-    const result = analyzeData(filteredData, selectedSection, kpiLabel);
+    const result = analyzeData(displayedData, selectedSection, kpiLabel);
     setAnalysis(result);
-  }, [filteredData, selectedSection, selectedKPI]);
+  }, [displayedData, selectedSection, selectedKPI]);
 
   // Calculate Card Metrics
   const metrics = useMemo(() => {
-    if (filteredData.length === 0) return null;
+    if (displayedData.length === 0) return null;
 
-    const totalCensus = filteredData.reduce((acc, curr) => acc + (curr.census || 0), 0);
-    const avgCensus = Math.round(totalCensus / filteredData.length);
+    const totalCensus = displayedData.reduce((acc, curr) => acc + (curr.census || 0), 0);
+    const avgCensus = Math.round(totalCensus / displayedData.length);
     
-    const successCount = filteredData.filter(r => dataService.isConformant(r)).length;
-    const successRate = (successCount / filteredData.length) * 100;
+    const successCount = displayedData.filter(r => dataService.isConformant(r)).length;
+    const successRate = (successCount / displayedData.length) * 100;
 
     let failureStreak = 0;
     // Streak records for modal details
     const streakRecords: KPIRecord[] = [];
     
-    for (let i = filteredData.length - 1; i >= 0; i--) {
-      if (!dataService.isConformant(filteredData[i])) {
+    for (let i = displayedData.length - 1; i >= 0; i--) {
+      if (!dataService.isConformant(displayedData[i])) {
         failureStreak++;
-        streakRecords.push(filteredData[i]);
+        streakRecords.push(displayedData[i]);
       } else {
         break;
       }
     }
 
-    const isLowerBetterForTrend = filteredData.length > 0 && selectedKPI !== 'All' ? dataService.isLowerBetter(filteredData[0]) : false;
+    const isLowerBetterForTrend = displayedData.length > 0 && selectedKPI !== 'All' ? dataService.isLowerBetter(displayedData[0]) : false;
     let trend = 0;
     let lastValue = 0;
     let prevValue = 0;
     
-    if (filteredData.length >= 2) {
-      const last = filteredData[filteredData.length-1];
-      const prev = filteredData[filteredData.length-2];
-      lastValue = isLowerBetterForTrend ? (last.actualPct || 0) : (last.actualPct || 0);
-      prevValue = isLowerBetterForTrend ? (prev.actualPct || 0) : (prev.actualPct || 0);
+    if (displayedData.length >= 2) {
+      const last = displayedData[displayedData.length-1];
+      const prev = displayedData[displayedData.length-2];
+      lastValue = (viewMode === 'percent' ? (last.actualPct || 0) : (last.actualTime || 0));
+      prevValue = (viewMode === 'percent' ? (prev.actualPct || 0) : (prev.actualTime || 0));
       trend = lastValue - prevValue;
     }
     
@@ -167,9 +208,9 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
         lastValue,
         prevValue,
         successCount,
-        failCount: filteredData.length - successCount
+        failCount: displayedData.length - successCount
     };
-  }, [filteredData, selectedKPI]);
+  }, [displayedData, selectedKPI, viewMode]);
 
   // Custom Tooltip for Variance
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -192,9 +233,14 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
         else varianceText = `-${absVariance} ${data.timeUnit} faster`;
       }
 
+      // Format label based on aggregation period
+      const formattedLabel = aggregationPeriod === 'quarterly' 
+        ? `${new Date(label).getFullYear()}-Q${Math.floor(new Date(label).getMonth() / 3) + 1}`
+        : new Date(label).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+
       return (
         <div className="bg-white p-3 border border-gray-200 shadow-lg rounded-lg text-xs z-50">
-          <p className="font-bold text-gray-700 mb-2">{new Date(label).toLocaleDateString(undefined, { year: 'numeric', month: 'long' })}</p>
+          <p className="font-bold text-gray-700 mb-2">{formattedLabel}</p>
           
           <div className="space-y-1">
             <p className="flex justify-between gap-4">
@@ -280,7 +326,7 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
 
       if (activeModal === 'census') {
           // Find Highs and Lows
-          const sortedByCensus = [...filteredData].sort((a,b) => (b.census || 0) - (a.census || 0));
+          const sortedByCensus = [...displayedData].sort((a,b) => (b.census || 0) - (a.census || 0));
           const top3 = sortedByCensus.slice(0, 3);
           const minCensus = sortedByCensus[sortedByCensus.length - 1]?.census || 0;
           const maxCensus = sortedByCensus[0]?.census || 0;
@@ -305,11 +351,15 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                     </div>
                 </div>
 
-                <h4 className="text-sm font-bold text-gray-700 mb-2">Busiest Recorded Months</h4>
+                <h4 className="text-sm font-bold text-gray-700 mb-2">Busiest Recorded {aggregationPeriod === 'quarterly' ? 'Quarters' : 'Months'}</h4>
                 <div className="space-y-2">
                     {top3.map((r, idx) => (
                         <div key={idx} className="flex justify-between items-center p-3 border border-gray-100 rounded-lg hover:bg-gray-50">
-                            <span className="text-sm font-medium text-gray-600">{new Date(r.month).toLocaleDateString(undefined, {month: 'long', year: 'numeric'})}</span>
+                            <span className="text-sm font-medium text-gray-600">
+                                {aggregationPeriod === 'quarterly' 
+                                    ? `${new Date(r.month).getFullYear()}-Q${Math.floor(new Date(r.month).getMonth() / 3) + 1}`
+                                    : new Date(r.month).toLocaleDateString(undefined, {month: 'long', year: 'numeric'})}
+                            </span>
                             <div className="flex items-center gap-2">
                                 <span className="font-bold text-indigo-600">{r.census}</span>
                                 <span className="text-xs text-gray-400">patients</span>
@@ -332,7 +382,11 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                          {metrics.streakRecords.map((r, idx) => (
                              <div key={idx} className="bg-red-50 border border-red-100 p-3 rounded-lg">
                                  <div className="flex justify-between items-center mb-1">
-                                     <span className="font-bold text-red-800">{new Date(r.month).toLocaleDateString(undefined, {month: 'long', year: 'numeric'})}</span>
+                                     <span className="font-bold text-red-800">
+                                        {aggregationPeriod === 'quarterly' 
+                                            ? `${new Date(r.month).getFullYear()}-Q${Math.floor(new Date(r.month).getMonth() / 3) + 1}`
+                                            : new Date(r.month).toLocaleDateString(undefined, {month: 'long', year: 'numeric'})}
+                                     </span>
                                      <span className="text-xs bg-white px-2 py-0.5 rounded text-red-600 border border-red-200">{r.kpiName}</span>
                                  </div>
                                  <div className="grid grid-cols-2 gap-4 text-sm mt-2">
@@ -367,7 +421,7 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
           const isTrendGood = metrics.isLowerBetterForTrend ? metrics.trend < 0 : metrics.trend > 0;
           return (
               <>
-                 <h3 className="text-lg font-bold text-gray-800 mb-1">Month-over-Month Trend</h3>
+                 <h3 className="text-lg font-bold text-gray-800 mb-1">{aggregationPeriod === 'quarterly' ? 'Quarter' : 'Month'}-over-{aggregationPeriod === 'quarterly' ? 'Quarter' : 'Month'} Trend</h3>
                  <p className="text-sm text-gray-500 mb-6">Comparison of the two most recent data points.</p>
 
                  <div className="flex items-center justify-between bg-gray-50 p-6 rounded-xl border border-gray-100 mb-6">
@@ -391,8 +445,8 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
 
                  <p className="text-sm text-gray-600 italic border-l-4 border-osmak-400 pl-3">
                      {isTrendGood 
-                        ? "Performance is trending in the right direction compared to the previous month." 
-                        : "Performance has declined compared to the previous month. Investigation may be required."}
+                        ? "Performance is trending in the right direction compared to the previous period." 
+                        : "Performance has declined compared to the previous period. Investigation may be required."}
                  </p>
               </>
           );
@@ -486,6 +540,25 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                 </label>
             </div>
         </div>
+        
+        {/* NEW: Aggregation Period Selector */}
+        <div className="space-y-1 flex-1 min-w-[150px]">
+            <label className="text-xs font-semibold text-gray-500 uppercase">Aggregation</label>
+            <div className="flex bg-gray-100 rounded-md p-1 h-10">
+                <button
+                    onClick={() => setAggregationPeriod('monthly')}
+                    className={`px-3 py-1 text-xs rounded-sm transition-all ${aggregationPeriod === 'monthly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                >
+                    Monthly
+                </button>
+                <button
+                    onClick={() => setAggregationPeriod('quarterly')}
+                    className={`px-3 py-1 text-xs rounded-sm transition-all ${aggregationPeriod === 'quarterly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                >
+                    Quarterly
+                </button>
+            </div>
+        </div>
       </div>
 
       {/* Executive Summary Widgets */}
@@ -550,7 +623,7 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                       </div>
                      <div className="flex items-baseline gap-1">
                         <h3 className="text-2xl font-bold text-gray-800">{metrics.failureStreak}</h3>
-                        <span className="text-sm text-gray-500">months</span>
+                        <span className="text-sm text-gray-500">{aggregationPeriod === 'quarterly' ? 'quarters' : 'months'}</span>
                      </div>
                    </div>
                    {metrics.failureStreak > 0 ? (
@@ -572,7 +645,7 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                  <div className="flex justify-between items-start">
                     <div>
                       <div className="flex items-center gap-1 mb-1">
-                        <p className="text-gray-400 text-xs font-bold uppercase tracking-wider">MoM Trend</p>
+                        <p className="text-gray-400 text-xs font-bold uppercase tracking-wider">{aggregationPeriod === 'quarterly' ? 'QoQ' : 'MoM'} Trend</p>
                         <ChevronRight className="w-3 h-3 text-gray-300" />
                       </div>
                       <h3 className={`text-2xl font-bold ${isTrendGood ? 'text-green-600' : 'text-red-600'}`}>
@@ -587,7 +660,7 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                        )}
                     </div>
                  </div>
-                 <p className="text-xs text-gray-400 mt-2">vs. Previous Month</p>
+                 <p className="text-xs text-gray-400 mt-2">vs. Previous {aggregationPeriod === 'quarterly' ? 'Quarter' : 'Month'}</p>
               </div>
             </div>
           )
@@ -595,12 +668,17 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
 
       {/* Main Chart */}
       <div className="bg-white p-6 rounded-xl shadow-md border border-gray-100">
-        <h3 className="text-lg font-bold text-osmak-800 mb-4">{selectedSection} {selectedKPI !== 'All' ? `- ${selectedKPI}` : ''} {selectedDept !== 'All' ? `(${selectedDept})` : ''} - Performance Trend</h3>
+        <h3 className="text-lg font-bold text-osmak-800 mb-4">{selectedSection} {selectedKPI !== 'All' ? `- ${selectedKPI}` : ''} {selectedDept !== 'All' ? `(${selectedDept})` : ''} - Performance Trend ({aggregationPeriod === 'quarterly' ? 'Quarterly' : 'Monthly'})</h3>
         <div className="h-[400px]">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={filteredData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+            <ComposedChart data={displayedData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
               <CartesianGrid stroke="#f3f4f6" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="month" tickFormatter={(value) => new Date(value).toLocaleDateString(undefined, { month: 'short', year: '2-digit' })} />
+              <XAxis 
+                dataKey="month" 
+                tickFormatter={(value) => aggregationPeriod === 'quarterly' 
+                    ? `${new Date(value).getFullYear()}-Q${Math.floor(new Date(value).getMonth() / 3) + 1}`
+                    : new Date(value).toLocaleDateString(undefined, { month: 'short', year: '2-digit' })} 
+              />
               
               <YAxis yAxisId="left" orientation="left" stroke="#15803d" label={{ value: viewMode === 'percent' ? '% Performance' : 'Time', angle: -90, position: 'insideLeft' }} />
               
@@ -689,6 +767,41 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
       )}
     </div>
   );
+};
+
+// Simple Gauge Component
+const CircularGauge = ({ value, color }: { value: number; color: string }) => {
+    const radius = 30;
+    const stroke = 5;
+    const normalizedRadius = radius - stroke * 2;
+    const circumference = normalizedRadius * 2 * Math.PI;
+    const strokeDashoffset = circumference - (value / 100) * circumference;
+  
+    return (
+      <div className="relative w-16 h-16 flex items-center justify-center">
+        <svg height={radius * 2} width={radius * 2} className="rotate-[-90deg]">
+          <circle
+            stroke="#e5e7eb"
+            strokeWidth={stroke}
+            r={normalizedRadius}
+            cx={radius}
+            cy={radius}
+            fill="transparent"
+          />
+          <circle
+            stroke={color}
+            fill="transparent"
+            strokeWidth={stroke}
+            strokeDasharray={circumference + ' ' + circumference}
+            style={{ strokeDashoffset, transition: 'stroke-dashoffset 0.5s ease-in-out' }}
+            strokeLinecap="round"
+            r={normalizedRadius}
+            cx={radius}
+            cy={radius}
+          />
+        </svg>
+      </div>
+    );
 };
 
 export default KPITrend;

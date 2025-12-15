@@ -13,6 +13,72 @@ interface RecordsProps {
   onRefresh: () => void;
 }
 
+// Helper to aggregate records by quarter (duplicate from KPITrend for now, could be moved to utils)
+const aggregateRecordsByQuarter = (records: KPIRecord[]): KPIRecord[] => {
+  const grouped: { [key: string]: KPIRecord[] } = {};
+
+  records.forEach(record => {
+    const date = new Date(record.month);
+    const year = date.getFullYear();
+    const quarter = Math.floor(date.getMonth() / 3) + 1; // 1 to 4
+    const quarterKey = `${year}-Q${quarter}`;
+
+    if (!grouped[quarterKey]) {
+      grouped[quarterKey] = [];
+    }
+    grouped[quarterKey].push(record);
+  });
+
+  return Object.keys(grouped).map(quarterKey => {
+    const quarterRecords = grouped[quarterKey];
+    
+    // Use the first record as a template for non-numerical fields
+    const templateRecord = quarterRecords[0];
+    const dateParts = quarterKey.split('-Q'); // ["YYYY", "Q"]
+    const year = parseInt(dateParts[0]);
+    const quarterNum = parseInt(dateParts[1]);
+    const firstMonthOfQuarter = new Date(year, (quarterNum - 1) * 3, 1).toISOString().slice(0, 10);
+
+    // Aggregate numerical values
+    let totalCensus = 0;
+    let sumTargetTime = 0;
+    let sumActualTime = 0;
+    let sumTargetPct = 0;
+    let sumActualPct = 0;
+    let countTime = 0;
+    let countPct = 0;
+
+    quarterRecords.forEach(r => {
+      totalCensus += r.census || 0;
+      if (r.kpiType === 'TIME') {
+        sumTargetTime += r.targetTime || 0;
+        sumActualTime += r.actualTime || 0;
+        countTime++;
+      } else { // PERCENTAGE
+        sumTargetPct += r.targetPct || 0;
+        sumActualPct += r.actualPct || 0;
+        countPct++;
+      }
+    });
+
+    const aggregatedRecord: KPIRecord = {
+      ...templateRecord,
+      id: `agg-${quarterKey}-${templateRecord.section}-${templateRecord.kpiName}-${templateRecord.department || 'na'}`,
+      month: firstMonthOfQuarter,
+      census: totalCensus,
+      targetTime: countTime > 0 ? sumTargetTime / countTime : undefined,
+      actualTime: countTime > 0 ? sumActualTime / countTime : undefined,
+      targetPct: countPct > 0 ? sumTargetPct / countPct : 0, // Default 0 for percentage if no records
+      actualPct: countPct > 0 ? sumActualPct / countPct : 0, // Default 0 for percentage if no records
+      remarks: `Aggregated for ${quarterKey}`,
+      status: 'APPROVED', // Assuming input records are approved.
+      // Retain timeUnit and kpiType from template, assuming consistency.
+    };
+    return aggregatedRecord;
+  }).sort((a, b) => new Date(a.month).getTime() - new Date(b.month).getTime()); // Sort aggregated data
+};
+
+
 const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefresh }) => {
   
   // Filters
@@ -20,6 +86,7 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
   const [filterKPI, setFilterKPI] = useState<string>('');
   const [filterDept, setFilterDept] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [viewPeriod, setViewPeriod] = useState<'monthly' | 'quarterly'>('monthly'); // New state
   
   // Sorting
   const [sortConfig, setSortConfig] = useState<{ key: keyof KPIRecord | string; direction: 'asc' | 'desc' } | null>(null);
@@ -226,7 +293,7 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
     return 'Time';
   };
 
-  const filteredRecords = useMemo(() => {
+  const filteredMonthlyRecords = useMemo(() => {
     if (!filterSection) return [];
 
     let sortableItems = records.filter(r => {
@@ -240,8 +307,17 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
       return matchesSection && matchesKPI && matchesDept && matchesSearch;
     });
 
+    return sortableItems;
+  }, [records, filterSection, filterKPI, filterDept, searchTerm]);
+
+  const displayedRecords = useMemo(() => {
+    let data = filteredMonthlyRecords;
+    if (viewPeriod === 'quarterly') {
+        data = aggregateRecordsByQuarter(filteredMonthlyRecords);
+    }
+
     if (sortConfig !== null) {
-      sortableItems.sort((a, b) => {
+      data.sort((a, b) => {
         // @ts-ignore dynamic key access
         let aValue = a[sortConfig.key];
         // @ts-ignore
@@ -257,6 +333,10 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
             // @ts-ignore
             bValue = getMeasureTypeDisplay(b);
         }
+        if (sortConfig.key === 'month') {
+            aValue = new Date(a.month).getTime();
+            bValue = new Date(b.month).getTime();
+        }
 
         if (aValue < bValue) {
           return sortConfig.direction === 'asc' ? -1 : 1;
@@ -267,26 +347,46 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
         return 0;
       });
     }
-    return sortableItems;
-  }, [records, filterSection, filterKPI, filterDept, searchTerm, sortConfig]);
+    return data;
+  }, [filteredMonthlyRecords, viewPeriod, sortConfig]);
+
 
   const handleExport = () => {
     if (!filterSection) {
         alert("Please select a section to export data.");
         return;
     }
-    const headers = ["Section", "KPI", "Department", "Type", "Month", "Census", "Target Time", "Actual Time", "Target %", "Actual %", "Submitted", "Due Date"];
+    
+    // Use displayedRecords for export
+    const headers = ["Section", "KPI", "Department", "Type", "Period", "Census", "Target Time", "Actual Time", "Target %", "Actual %", "Submitted", "Due Date"];
     const csvContent = [
       headers.join(','),
-      ...filteredRecords.map(r => [
-        `"${r.section}"`, `"${r.kpiName}"`, `"${r.department}"`, getMeasureTypeDisplay(r), r.month, r.census, r.targetTime, r.actualTime, r.targetPct, r.actualPct, r.dateSubmitted, r.dueDate
-      ].join(','))
+      ...displayedRecords.map(r => {
+        const periodDisplay = viewPeriod === 'quarterly' 
+            ? `${new Date(r.month).getFullYear()}-Q${Math.floor(new Date(r.month).getMonth() / 3) + 1}`
+            : r.month;
+
+        return [
+          `"${r.section}"`, 
+          `"${r.kpiName}"`, 
+          `"${r.department}"`, 
+          getMeasureTypeDisplay(r), 
+          periodDisplay, 
+          r.census, 
+          r.targetTime, 
+          r.actualTime, 
+          r.targetPct, 
+          r.actualPct, 
+          r.dateSubmitted, 
+          r.dueDate
+        ].join(',');
+      })
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `kpi_records_${filterSection}_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `kpi_records_${filterSection}_${viewPeriod}_${new Date().toISOString().split('T')[0]}.csv`;
     link.click();
   };
 
@@ -696,6 +796,21 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
         </div>
 
         <div className="flex gap-2">
+            {/* NEW: View Period Selector */}
+            <div className="flex bg-gray-100 rounded-md p-1">
+                <button
+                    onClick={() => setViewPeriod('monthly')}
+                    className={`px-3 py-1 text-xs rounded-sm transition-all ${viewPeriod === 'monthly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                >
+                    Monthly
+                </button>
+                <button
+                    onClick={() => setViewPeriod('quarterly')}
+                    className={`px-3 py-1 text-xs rounded-sm transition-all ${viewPeriod === 'quarterly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
+                >
+                    Quarterly
+                </button>
+            </div>
            {/* Check Entries Button */}
            <button 
               onClick={onCheckEntriesClick}
@@ -728,9 +843,9 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
       {/* Main Table Container */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         <div className="px-6 py-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">KPI Records Database (Official)</h3>
+            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">KPI Records Database (Official - {viewPeriod === 'quarterly' ? 'Quarterly' : 'Monthly'})</h3>
             <span className="text-xs font-semibold text-osmak-700 bg-osmak-50 px-2 py-1 rounded-full border border-osmak-100">
-                Visible Records: {filteredRecords.length}
+                Visible Records: {displayedRecords.length}
             </span>
         </div>
         
@@ -752,24 +867,28 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Target</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actual</th>
                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('conformance')}>Status {renderSortIcon('conformance')}</th>
-                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('month')}>Date {renderSortIcon('month')}</th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onClick={() => requestSort('month')}>{viewPeriod === 'quarterly' ? 'Quarter' : 'Month'} {renderSortIcon('month')}</th>
                     <th scope="col" className="relative px-6 py-3"><span className="sr-only">Actions</span></th>
                 </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200 text-sm">
-                {filteredRecords.map((record) => {
+                {displayedRecords.map((record) => {
                     const isPass = dataService.isConformant(record);
                     const measureType = getMeasureTypeDisplay(record);
                     const actualTimeDisplay = record.actualTime !== undefined && record.actualTime !== null && !isNaN(Number(record.actualTime)) ? Number(record.actualTime).toFixed(2) : '-';
                     const actualPctDisplay = record.actualPct !== undefined && record.actualPct !== null && !isNaN(Number(record.actualPct)) ? Number(record.actualPct).toFixed(2) : '0.00';
                     
-                    const displayTarget = record.kpiType === 'TIME' ? `${record.targetTime} ${record.timeUnit}` : `${record.targetPct}%`;
+                    const displayTarget = record.kpiType === 'TIME' ? `${record.targetTime?.toFixed(2)} ${record.timeUnit}` : `${record.targetPct?.toFixed(2)}%`;
                     const displayActual = record.kpiType === 'TIME' ? `${actualTimeDisplay} ${record.timeUnit}` : `${actualPctDisplay}%`;
 
                     // Handle dual display if defined
                     const hasDual = record.targetTime && record.targetPct;
-                    const finalTarget = hasDual ? `${record.targetTime} ${record.timeUnit} | ${record.targetPct}%` : displayTarget;
+                    const finalTarget = hasDual ? `${record.targetTime?.toFixed(2)} ${record.timeUnit} | ${record.targetPct?.toFixed(2)}%` : displayTarget;
                     const finalActual = hasDual ? `${actualTimeDisplay} ${record.timeUnit} | ${actualPctDisplay}%` : displayActual;
+
+                    const periodDisplay = viewPeriod === 'quarterly' 
+                        ? `${new Date(record.month).getFullYear()}-Q${Math.floor(new Date(record.month).getMonth() / 3) + 1}`
+                        : record.month;
 
                     return (
                     <tr key={record.id} className="hover:bg-gray-50">
@@ -782,11 +901,21 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
                         <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${isPass ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{isPass ? 'Conformant' : 'Non-Conformant'}</span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{record.month}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-gray-500">{periodDisplay}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <div className="flex items-center justify-end gap-2">
-                            <button onClick={() => onEditClick(record)} className="text-indigo-600 hover:text-indigo-900"><Edit2 className="w-4 h-4" /></button>
-                            <button onClick={() => onDeleteClick(record.id)} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
+                            {/* Allow editing/deleting only original monthly records for now, not aggregated ones */}
+                            {viewPeriod === 'monthly' && (
+                                <>
+                                    <button onClick={() => onEditClick(record)} className="text-indigo-600 hover:text-indigo-900"><Edit2 className="w-4 h-4" /></button>
+                                    <button onClick={() => onDeleteClick(record.id)} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
+                                </>
+                            )}
+                            {viewPeriod === 'quarterly' && (
+                                <span title="Edit/Delete not available for aggregated data">
+                                    <Info className="w-4 h-4 text-gray-400" />
+                                </span>
+                            )}
                         </div>
                         </td>
                     </tr>
