@@ -17,13 +17,14 @@ import { KPIRecord, SectionName } from '../types';
 import { dataService } from '../services/dataService';
 import { analyzeData } from '../services/analysisService';
 import { TrendingUp, TrendingDown, Users, Activity, Sparkles, Calendar, ArrowUpRight, ArrowDownRight, AlertCircle, X, ChevronRight, Download, FileImage, Loader } from 'lucide-react';
+// @ts-ignore - html-to-image might not have types in this environment but is available via importmap
 import { toPng } from 'html-to-image';
 
 interface KPITrendProps {
   records: KPIRecord[];
 }
 
-// Helper to aggregate records by quarter
+// Helper to aggregate records by quarter using averages for metrics
 const aggregateRecordsByQuarter = (records: KPIRecord[]): KPIRecord[] => {
   const grouped: { [key: string]: KPIRecord[] } = {};
 
@@ -60,18 +61,21 @@ const aggregateRecordsByQuarter = (records: KPIRecord[]): KPIRecord[] => {
 
     quarterRecords.forEach(r => {
       totalCensus += r.census || 0;
-      if (r.kpiType === 'TIME') {
-        sumTargetTime += r.targetTime || 0;
-        sumActualTime += r.actualTime || 0;
+      // Aggregate TIME metrics if they exist
+      if (r.targetTime !== undefined && r.actualTime !== undefined) {
+        sumTargetTime += r.targetTime;
+        sumActualTime += r.actualTime;
         countTime++;
-      } else { // PERCENTAGE
-        sumTargetPct += r.targetPct || 0;
-        sumActualPct += r.actualPct || 0;
+      }
+      // Aggregate PERCENTAGE metrics if they exist
+      if (r.targetPct !== undefined && r.actualPct !== undefined) {
+        sumTargetPct += r.targetPct;
+        sumActualPct += r.actualPct;
         countPct++;
       }
     });
 
-    // Determine conformance based on the average
+    // Create the aggregated record with averaged metrics
     const aggregatedRecord: KPIRecord = {
       ...templateRecord,
       id: `agg-${quarterKey}-${templateRecord.section}-${templateRecord.kpiName}-${templateRecord.department || 'na'}`,
@@ -81,7 +85,7 @@ const aggregateRecordsByQuarter = (records: KPIRecord[]): KPIRecord[] => {
       actualTime: countTime > 0 ? sumActualTime / countTime : undefined,
       targetPct: countPct > 0 ? sumTargetPct / countPct : 0, 
       actualPct: countPct > 0 ? sumActualPct / countPct : 0, 
-      remarks: `Aggregated for ${quarterKey}`,
+      remarks: `Averaged data for ${quarterKey}`,
       status: 'APPROVED', 
     };
     return aggregatedRecord;
@@ -345,7 +349,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
       }
 
       if (activeModal === 'census') {
-          // Always show MONTHLY census breakdown in the modal based on date range
           const monthlyBreakdown = [...filteredMonthlyData].sort((a,b) => new Date(b.month).getTime() - new Date(a.month).getTime());
           const maxVal = monthlyBreakdown.length > 0 ? Math.max(...monthlyBreakdown.map(r => r.census || 0)) : 0;
           const minVal = monthlyBreakdown.length > 0 ? Math.min(...monthlyBreakdown.map(r => r.census || 0)) : 0;
@@ -532,60 +535,62 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
             </div>
         </div>
 
-        {/* VIEW OPTIONS, AGGREGATION - LEFT ALIGNED */}
-        <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">VIEW OPTIONS</label>
-            <div className="flex items-center gap-4 h-10">
+        {/* View and Aggregation - Left Aligned */}
+        <div className="flex flex-wrap gap-6 items-end">
+            <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">VIEW OPTIONS</label>
+                <div className="flex items-center gap-4 h-10">
                     <div className="flex bg-gray-100 rounded-lg p-1 shadow-inner border border-gray-200">
+                        <button
+                            onClick={() => setViewMode('percent')}
+                            className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${viewMode === 'percent' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
+                        >
+                            % Perf
+                        </button>
+                        <button
+                            onClick={() => setViewMode('time')}
+                            className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${viewMode === 'time' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
+                        >
+                            Time/Day
+                        </button>
+                    </div>
+                    <label className="inline-flex items-center cursor-pointer whitespace-nowrap group">
+                        <div className="relative">
+                            <input 
+                                type="checkbox" 
+                                checked={showCensus} 
+                                onChange={(e) => setShowCensus(e.target.checked)} 
+                                className="sr-only peer" 
+                            />
+                            <div className="w-5 h-5 bg-white border-2 border-gray-300 rounded peer-checked:bg-osmak-600 peer-checked:border-osmak-600 flex items-center justify-center transition-all group-hover:border-osmak-400">
+                                <div className={`w-1.5 h-3 border-r-2 border-b-2 border-white rotate-45 mb-0.5 ${showCensus ? 'block' : 'hidden'}`}></div>
+                            </div>
+                        </div>
+                        <span className="ml-2 text-[11px] text-gray-600 font-bold uppercase tracking-wider">Census</span>
+                    </label>
+                </div>
+            </div>
+            
+            <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">AGGREGATION</label>
+                <div className="flex bg-gray-100 rounded-lg p-1 h-10 shadow-inner border border-gray-200">
                     <button
-                    onClick={() => setViewMode('percent')}
-                    className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${viewMode === 'percent' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
+                        onClick={() => setAggregationPeriod('monthly')}
+                        className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${aggregationPeriod === 'monthly' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
                     >
-                    % Perf
+                        Monthly
                     </button>
                     <button
-                    onClick={() => setViewMode('time')}
-                    className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${viewMode === 'time' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
+                        onClick={() => setAggregationPeriod('quarterly')}
+                        className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${aggregationPeriod === 'quarterly' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
                     >
-                    Time/Day
+                        Quarterly
                     </button>
                 </div>
-                <label className="inline-flex items-center cursor-pointer whitespace-nowrap group">
-                    <div className="relative">
-                        <input 
-                            type="checkbox" 
-                            checked={showCensus} 
-                            onChange={(e) => setShowCensus(e.target.checked)} 
-                            className="sr-only peer" 
-                        />
-                        <div className="w-5 h-5 bg-white border-2 border-gray-300 rounded peer-checked:bg-osmak-600 peer-checked:border-osmak-600 flex items-center justify-center transition-all group-hover:border-osmak-400">
-                            <div className={`w-1.5 h-3 border-r-2 border-b-2 border-white rotate-45 mb-0.5 ${showCensus ? 'block' : 'hidden'}`}></div>
-                        </div>
-                    </div>
-                    <span className="ml-2 text-[11px] text-gray-600 font-bold uppercase tracking-wider">Census</span>
-                </label>
-            </div>
-        </div>
-        
-        <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">AGGREGATION</label>
-            <div className="flex bg-gray-100 rounded-lg p-1 h-10 shadow-inner border border-gray-200">
-                <button
-                    onClick={() => setAggregationPeriod('monthly')}
-                    className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${aggregationPeriod === 'monthly' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
-                >
-                    Monthly
-                </button>
-                <button
-                    onClick={() => setAggregationPeriod('quarterly')}
-                    className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${aggregationPeriod === 'quarterly' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
-                >
-                    Quarterly
-                </button>
             </div>
         </div>
 
-        {/* DOWNLOAD BUTTON - RIGHT ALIGNED */}
+        {/* Download Report - Right Aligned */}
         <div className="h-10 ml-auto">
             <button 
                 onClick={downloadReportAsPNG}
