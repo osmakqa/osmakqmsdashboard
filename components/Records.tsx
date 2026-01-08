@@ -154,16 +154,31 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
   const scopedDeptsForAdd = useMemo(() => {
       if (!selectedAddSection) return [];
       
+      // 1. From Approved Records
       let filteredRecords = records.filter(r => r.section === selectedAddSection);
-      
-      // If a KPI is selected, restrict departments to that KPI only
+      // 2. From Drafts (so we can see depts from pending entries)
+      let filteredDrafts = drafts.filter(r => r.section === selectedAddSection);
+
       if (currentLineItem.kpiName) {
           filteredRecords = filteredRecords.filter(r => r.kpiName === currentLineItem.kpiName);
+          filteredDrafts = filteredDrafts.filter(r => r.kpiName === currentLineItem.kpiName);
       }
       
-      const depts = filteredRecords.map(r => r.department).filter(Boolean);
-      return Array.from(new Set(depts)).sort();
-  }, [selectedAddSection, currentLineItem.kpiName, records]);
+      const recordDepts = filteredRecords.map(r => r.department).filter(Boolean);
+      const draftDepts = filteredDrafts.map(r => r.department).filter(Boolean);
+
+      // 3. From Definitions
+      let filteredDefs = definitions.filter(d => d.section === selectedAddSection);
+      if (currentLineItem.kpiName) {
+          filteredDefs = filteredDefs.filter(d => d.kpiName === currentLineItem.kpiName);
+      }
+      const defDepts = filteredDefs.map(d => d.department).filter(Boolean) as string[];
+
+      // 4. Combine
+      const combined = Array.from(new Set([...recordDepts, ...draftDepts, ...defDepts])).sort();
+      
+      return combined;
+  }, [selectedAddSection, currentLineItem.kpiName, records, drafts, definitions]);
 
 
   // Initialize Line Item
@@ -1181,19 +1196,14 @@ const Records: React.FC<RecordsProps> = ({ records, drafts, definitions, onRefre
                                     {/* Department (Span 4) */}
                                     <div className="md:col-span-4">
                                         <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Department</label>
-                                        <div className="relative">
-                                            <input 
-                                                type="text" 
-                                                list="dept-options"
-                                                className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 bg-white"
-                                                value={currentLineItem.department}
-                                                onChange={(e) => setCurrentLineItem({...currentLineItem, department: e.target.value})}
-                                                placeholder="e.g. ICU"
-                                            />
-                                            <datalist id="dept-options">
-                                                {scopedDeptsForAdd.map(d => <option key={d} value={d} />)}
-                                            </datalist>
-                                        </div>
+                                        <select 
+                                            className="w-full border-gray-300 rounded focus:ring-osmak-500 focus:border-osmak-500 py-2 text-sm text-gray-900 bg-white"
+                                            value={currentLineItem.department}
+                                            onChange={(e) => setCurrentLineItem({...currentLineItem, department: e.target.value})}
+                                        >
+                                            <option value="">-- Select Department --</option>
+                                            {scopedDeptsForAdd.map(d => <option key={d} value={d}>{d}</option>)}
+                                        </select>
                                     </div>
 
                                     {/* Reporting Month (Span 3) - Moved Here */}

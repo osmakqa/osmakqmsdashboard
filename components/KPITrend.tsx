@@ -1,5 +1,4 @@
-
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   ComposedChart,
   Line,
@@ -17,7 +16,8 @@ import {
 import { KPIRecord, SectionName } from '../types';
 import { dataService } from '../services/dataService';
 import { analyzeData } from '../services/analysisService';
-import { TrendingUp, TrendingDown, Users, Activity, Sparkles, Calendar, ArrowUpRight, ArrowDownRight, AlertCircle, X, ChevronRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, Users, Activity, Sparkles, Calendar, ArrowUpRight, ArrowDownRight, AlertCircle, X, ChevronRight, Download, FileImage, Loader } from 'lucide-react';
+import { toPng } from 'html-to-image';
 
 interface KPITrendProps {
   records: KPIRecord[];
@@ -79,25 +79,27 @@ const aggregateRecordsByQuarter = (records: KPIRecord[]): KPIRecord[] => {
       census: totalCensus,
       targetTime: countTime > 0 ? sumTargetTime / countTime : undefined,
       actualTime: countTime > 0 ? sumActualTime / countTime : undefined,
-      targetPct: countPct > 0 ? sumTargetPct / countPct : 0, // Default 0 for percentage if no records
-      actualPct: countPct > 0 ? sumActualPct / countPct : 0, // Default 0 for percentage if no records
+      targetPct: countPct > 0 ? sumTargetPct / countPct : 0, 
+      actualPct: countPct > 0 ? sumActualPct / countPct : 0, 
       remarks: `Aggregated for ${quarterKey}`,
-      status: 'APPROVED', // Assuming input records are approved.
-      // Retain timeUnit and kpiType from template, assuming consistency.
+      status: 'APPROVED', 
     };
     return aggregatedRecord;
-  }).sort((a, b) => new Date(a.month).getTime() - new Date(b.month).getTime()); // Sort aggregated data
+  }).sort((a, b) => new Date(a.month).getTime() - new Date(b.month).getTime());
 };
 
 
 const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
+  const reportRef = useRef<HTMLDivElement>(null);
+  const [isExporting, setIsExporting] = useState(false);
+
   // Filters
   const [selectedSection, setSelectedSection] = useState<string>(SectionName.ER);
   const [selectedKPI, setSelectedKPI] = useState<string>('All');
   const [selectedDept, setSelectedDept] = useState<string>('All');
   const [showCensus, setShowCensus] = useState(true);
   const [viewMode, setViewMode] = useState<'percent' | 'time'>('percent');
-  const [aggregationPeriod, setAggregationPeriod] = useState<'monthly' | 'quarterly'>('monthly'); // New state
+  const [aggregationPeriod, setAggregationPeriod] = useState<'monthly' | 'quarterly'>('monthly'); 
   
   // Date Filters
   const [dateFrom, setDateFrom] = useState('2023-01-01');
@@ -172,7 +174,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
     const successRate = (successCount / displayedData.length) * 100;
 
     let failureStreak = 0;
-    // Streak records for modal details
     const streakRecords: KPIRecord[] = [];
     
     for (let i = displayedData.length - 1; i >= 0; i--) {
@@ -212,7 +213,29 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
     };
   }, [displayedData, selectedKPI, viewMode]);
 
-  // Custom Tooltip for Variance
+  const downloadReportAsPNG = async () => {
+    if (!reportRef.current) return;
+    setIsExporting(true);
+    try {
+      const dataUrl = await toPng(reportRef.current, {
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+        style: {
+          padding: '20px',
+        }
+      });
+      const link = document.createElement('a');
+      link.download = `OsMak_KPI_Analysis_${selectedSection.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (error) {
+      console.error('Failed to download image:', error);
+      alert('Could not generate PNG. Please try again.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
@@ -233,7 +256,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
         else varianceText = `-${absVariance} ${data.timeUnit} faster`;
       }
 
-      // Format label based on aggregation period
       const formattedLabel = aggregationPeriod === 'quarterly' 
         ? `${new Date(label).getFullYear()}-Q${Math.floor(new Date(label).getMonth() / 3) + 1}`
         : new Date(label).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
@@ -241,7 +263,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
       return (
         <div className="bg-white p-3 border border-gray-200 shadow-lg rounded-lg text-xs z-50">
           <p className="font-bold text-gray-700 mb-2">{formattedLabel}</p>
-          
           <div className="space-y-1">
             <p className="flex justify-between gap-4">
               <span className="text-gray-500">Actual:</span>
@@ -274,7 +295,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
     return null;
   };
 
-  // Detail Modal
   const renderModalContent = () => {
       if (!metrics) return null;
 
@@ -325,45 +345,45 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
       }
 
       if (activeModal === 'census') {
-          const sortedByCensus = [...displayedData].sort((a,b) => (b.census || 0) - (a.census || 0));
-          const minCensus = sortedByCensus[sortedByCensus.length - 1]?.census || 0;
-          const maxCensus = sortedByCensus[0]?.census || 0;
+          // Always show MONTHLY census breakdown in the modal based on date range
+          const monthlyBreakdown = [...filteredMonthlyData].sort((a,b) => new Date(b.month).getTime() - new Date(a.month).getTime());
+          const maxVal = monthlyBreakdown.length > 0 ? Math.max(...monthlyBreakdown.map(r => r.census || 0)) : 0;
+          const minVal = monthlyBreakdown.length > 0 ? Math.min(...monthlyBreakdown.map(r => r.census || 0)) : 0;
 
           return (
               <>
                 <h3 className="text-lg font-bold text-gray-800 mb-1">Census Analysis</h3>
-                <p className="text-sm text-gray-500 mb-6">Patient volume distribution for the selected date range.</p>
-                
+                <p className="text-sm text-gray-500 mb-6">Monthly patient volume distribution for the selected date range.</p>
                 <div className="grid grid-cols-3 gap-4 mb-6">
                     <div className="bg-indigo-50 p-3 rounded-lg text-center">
-                        <p className="text-xs text-indigo-600 uppercase font-bold">Total Volume</p>
-                        <p className="text-xl font-bold text-indigo-900">{metrics.totalCensus}</p>
+                        <p className="text-[10px] text-indigo-600 uppercase font-bold tracking-wider">Total Range Vol</p>
+                        <p className="text-xl font-bold text-indigo-900">{filteredMonthlyData.reduce((acc, c) => acc + (c.census || 0), 0)}</p>
                     </div>
                     <div className="bg-gray-50 p-3 rounded-lg text-center">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Min</p>
-                        <p className="text-xl font-bold text-gray-700">{minCensus}</p>
+                        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Min Monthly</p>
+                        <p className="text-xl font-bold text-gray-700">{minVal}</p>
                     </div>
                     <div className="bg-gray-50 p-3 rounded-lg text-center">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Max</p>
-                        <p className="text-xl font-bold text-gray-700">{maxCensus}</p>
+                        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Max Monthly</p>
+                        <p className="text-xl font-bold text-gray-700">{maxVal}</p>
                     </div>
                 </div>
-
-                <h4 className="text-sm font-bold text-gray-700 mb-2">Detailed Census ({aggregationPeriod === 'quarterly' ? 'Quarters' : 'Months'})</h4>
+                <h4 className="text-sm font-bold text-gray-700 mb-2">Monthly Census History</h4>
                 <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                    {displayedData.map((r, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-3 border border-gray-100 rounded-lg hover:bg-gray-50">
+                    {monthlyBreakdown.map((r, idx) => (
+                        <div key={idx} className="flex justify-between items-center p-3 border border-gray-100 rounded-lg hover:bg-gray-50 group transition-all">
                             <span className="text-sm font-medium text-gray-600">
-                                {aggregationPeriod === 'quarterly' 
-                                    ? `${new Date(r.month).getFullYear()}-Q${Math.floor(new Date(r.month).getMonth() / 3) + 1}`
-                                    : new Date(r.month).toLocaleDateString(undefined, {month: 'long', year: 'numeric'})}
+                                {new Date(r.month).toLocaleDateString(undefined, {month: 'long', year: 'numeric'})}
                             </span>
                             <div className="flex items-center gap-2">
-                                <span className="font-bold text-indigo-600">{r.census}</span>
-                                <span className="text-xs text-gray-400">patients</span>
+                                <span className="font-bold text-indigo-600 group-hover:scale-110 transition-transform">{r.census}</span>
+                                <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Patients</span>
                             </div>
                         </div>
                     ))}
+                    {monthlyBreakdown.length === 0 && (
+                        <div className="text-center py-10 text-gray-400 text-sm italic">No monthly data available in this range.</div>
+                    )}
                 </div>
               </>
           );
@@ -374,7 +394,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
               <>
                  <h3 className="text-lg font-bold text-gray-800 mb-1">Failure Streak Details</h3>
                  <p className="text-sm text-gray-500 mb-6">Breakdown of the current consecutive non-conformance streak.</p>
-                 
                  {metrics.failureStreak > 0 ? (
                      <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                          {metrics.streakRecords.map((r, idx) => (
@@ -421,7 +440,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
               <>
                  <h3 className="text-lg font-bold text-gray-800 mb-1">{aggregationPeriod === 'quarterly' ? 'Quarter' : 'Month'}-over-{aggregationPeriod === 'quarterly' ? 'Quarter' : 'Month'} Trend</h3>
                  <p className="text-sm text-gray-500 mb-6">Comparison of the two most recent data points.</p>
-
                  <div className="flex items-center justify-between bg-gray-50 p-6 rounded-xl border border-gray-100 mb-6">
                      <div className="text-center">
                          <p className="text-xs text-gray-500 uppercase font-bold mb-1">Previous</p>
@@ -440,7 +458,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                          <p className="text-2xl font-bold text-gray-800">{metrics.lastValue.toFixed(2)}</p>
                      </div>
                  </div>
-
                  <p className="text-sm text-gray-600 italic border-l-4 border-osmak-400 pl-3">
                      {isTrendGood 
                         ? "Performance is trending in the right direction compared to the previous period." 
@@ -455,13 +472,13 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Controls & Filters */}
-      <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-100 flex flex-wrap gap-4 items-end">
-        <div className="space-y-1 flex-1 min-w-[200px]">
-          <label className="text-xs font-semibold text-gray-500 uppercase">Section</label>
+      <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-100 flex flex-wrap gap-6 items-end relative overflow-hidden">
+        <div className="space-y-1.5 flex-1 min-w-[200px]">
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Section</label>
           <select
             value={selectedSection}
             onChange={(e) => setSelectedSection(e.target.value)}
-            className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-osmak-500 focus:border-osmak-500 sm:text-sm rounded-md border text-gray-900 bg-white"
+            className="block w-full pl-3 pr-10 py-2.5 text-sm border-gray-300 focus:outline-none focus:ring-osmak-500 focus:border-osmak-500 rounded-md border text-gray-900 bg-white font-medium"
           >
             {Object.values(SectionName).map(name => (
               <option key={name} value={name}>{name}</option>
@@ -469,12 +486,12 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
           </select>
         </div>
 
-        <div className="space-y-1 flex-1 min-w-[200px]">
-          <label className="text-xs font-semibold text-gray-500 uppercase">KPI</label>
+        <div className="space-y-1.5 flex-1 min-w-[200px]">
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">KPI Name</label>
           <select
             value={selectedKPI}
             onChange={(e) => setSelectedKPI(e.target.value)}
-            className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-osmak-500 focus:border-osmak-500 sm:text-sm rounded-md border text-gray-900 bg-white"
+            className="block w-full pl-3 pr-10 py-2.5 text-sm border-gray-300 focus:outline-none focus:ring-osmak-500 focus:border-osmak-500 rounded-md border text-gray-900 bg-white font-medium"
           >
             {availableKPIs.map(kpi => (
               <option key={kpi} value={kpi}>{kpi}</option>
@@ -482,12 +499,12 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
           </select>
         </div>
 
-        <div className="space-y-1 flex-1 min-w-[200px]">
-          <label className="text-xs font-semibold text-gray-500 uppercase">Type / Department</label>
+        <div className="space-y-1.5 flex-1 min-w-[200px]">
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Type / Department</label>
           <select
             value={selectedDept}
             onChange={(e) => setSelectedDept(e.target.value)}
-            className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-osmak-500 focus:border-osmak-500 sm:text-sm rounded-md border text-gray-900 bg-white"
+            className="block w-full pl-3 pr-10 py-2.5 text-sm border-gray-300 focus:outline-none focus:ring-osmak-500 focus:border-osmak-500 rounded-md border text-gray-900 bg-white font-medium"
           >
             {availableDepts.map(dept => (
               <option key={dept} value={dept}>{dept}</option>
@@ -495,68 +512,89 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
           </select>
         </div>
 
-        <div className="space-y-1 flex-[1.5] min-w-[300px]">
-            <label className="text-xs font-semibold text-gray-500 uppercase flex items-center gap-1">
-                <Calendar className="w-3 h-3"/> Date Range
+        <div className="space-y-1.5 flex-[1.2] min-w-[280px]">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1">
+                <Calendar className="w-3 h-3"/> Analysis Period
             </label>
             <div className="flex gap-2">
                 <input 
                     type="date" 
                     value={dateFrom}
                     onChange={(e) => setDateFrom(e.target.value)}
-                    className="block w-full pl-2 py-2 text-xs border-gray-300 focus:ring-osmak-500 focus:border-osmak-500 rounded-md border text-gray-900 bg-white [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                    className="block w-full px-2 py-2 text-xs border-gray-300 focus:ring-osmak-500 focus:border-osmak-500 rounded-md border text-gray-900 bg-white [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
                 />
                 <input 
                     type="date" 
                     value={dateTo}
                     onChange={(e) => setDateTo(e.target.value)}
-                    className="block w-full pl-2 py-2 text-xs border-gray-300 focus:ring-osmak-500 focus:border-osmak-500 rounded-md border text-gray-900 bg-white [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                    className="block w-full px-2 py-2 text-xs border-gray-300 focus:ring-osmak-500 focus:border-osmak-500 rounded-md border text-gray-900 bg-white [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
                 />
             </div>
         </div>
 
-        <div className="flex flex-wrap gap-4 flex-1">
-             <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">View Options</label>
-                <div className="flex items-center gap-4 h-10">
-                     <div className="flex bg-gray-100 rounded-md p-1">
-                        <button
-                        onClick={() => setViewMode('percent')}
-                        className={`px-3 py-1 text-xs rounded-sm transition-all ${viewMode === 'percent' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
-                        >
-                        % Perf
-                        </button>
-                        <button
-                        onClick={() => setViewMode('time')}
-                        className={`px-3 py-1 text-xs rounded-sm transition-all ${viewMode === 'time' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
-                        >
-                        Time/Day
-                        </button>
+        {/* VIEW OPTIONS, AGGREGATION - LEFT ALIGNED */}
+        <div className="space-y-1.5">
+            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">VIEW OPTIONS</label>
+            <div className="flex items-center gap-4 h-10">
+                    <div className="flex bg-gray-100 rounded-lg p-1 shadow-inner border border-gray-200">
+                    <button
+                    onClick={() => setViewMode('percent')}
+                    className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${viewMode === 'percent' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                    % Perf
+                    </button>
+                    <button
+                    onClick={() => setViewMode('time')}
+                    className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${viewMode === 'time' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                    Time/Day
+                    </button>
+                </div>
+                <label className="inline-flex items-center cursor-pointer whitespace-nowrap group">
+                    <div className="relative">
+                        <input 
+                            type="checkbox" 
+                            checked={showCensus} 
+                            onChange={(e) => setShowCensus(e.target.checked)} 
+                            className="sr-only peer" 
+                        />
+                        <div className="w-5 h-5 bg-white border-2 border-gray-300 rounded peer-checked:bg-osmak-600 peer-checked:border-osmak-600 flex items-center justify-center transition-all group-hover:border-osmak-400">
+                            <div className={`w-1.5 h-3 border-r-2 border-b-2 border-white rotate-45 mb-0.5 ${showCensus ? 'block' : 'hidden'}`}></div>
+                        </div>
                     </div>
-                    <label className="inline-flex items-center cursor-pointer whitespace-nowrap">
-                        <input type="checkbox" checked={showCensus} onChange={(e) => setShowCensus(e.target.checked)} className="form-checkbox h-4 w-4 text-osmak-600 rounded" />
-                        <span className="ml-2 text-xs text-gray-700 font-medium">Census</span>
-                    </label>
-                </div>
+                    <span className="ml-2 text-[11px] text-gray-600 font-bold uppercase tracking-wider">Census</span>
+                </label>
             </div>
-            
-            <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">Aggregation</label>
-                <div className="flex bg-gray-100 rounded-md p-1 h-10">
-                    <button
-                        onClick={() => setAggregationPeriod('monthly')}
-                        className={`px-3 py-1 text-xs rounded-sm transition-all ${aggregationPeriod === 'monthly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
-                    >
-                        Monthly
-                    </button>
-                    <button
-                        onClick={() => setAggregationPeriod('quarterly')}
-                        className={`px-3 py-1 text-xs rounded-sm transition-all ${aggregationPeriod === 'quarterly' ? 'bg-white shadow text-osmak-700 font-bold' : 'text-gray-500'}`}
-                    >
-                        Quarterly
-                    </button>
-                </div>
+        </div>
+        
+        <div className="space-y-1.5">
+            <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-1 block">AGGREGATION</label>
+            <div className="flex bg-gray-100 rounded-lg p-1 h-10 shadow-inner border border-gray-200">
+                <button
+                    onClick={() => setAggregationPeriod('monthly')}
+                    className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${aggregationPeriod === 'monthly' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
+                >
+                    Monthly
+                </button>
+                <button
+                    onClick={() => setAggregationPeriod('quarterly')}
+                    className={`px-4 py-1 text-[11px] font-bold rounded-md transition-all ${aggregationPeriod === 'quarterly' ? 'bg-white shadow-sm text-osmak-700' : 'text-gray-400 hover:text-gray-600'}`}
+                >
+                    Quarterly
+                </button>
             </div>
+        </div>
+
+        {/* DOWNLOAD BUTTON - RIGHT ALIGNED */}
+        <div className="h-10 ml-auto">
+            <button 
+                onClick={downloadReportAsPNG}
+                disabled={isExporting}
+                className="flex items-center gap-2 px-6 py-0 h-full bg-osmak-700 text-white rounded-lg text-sm font-bold hover:bg-osmak-800 transition-all disabled:opacity-50 shadow-md active:scale-95 group"
+            >
+                {isExporting ? <Loader className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />}
+                {isExporting ? 'Exporting...' : 'Download Report'}
+            </button>
         </div>
       </div>
 
@@ -565,43 +603,41 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
           const isTrendGood = metrics.isLowerBetterForTrend ? metrics.trend < 0 : metrics.trend > 0;
           return (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              {/* Success Rate Widget */}
               <div 
                 onClick={() => setActiveModal('success')}
                 className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between cursor-pointer hover:shadow-md transition-all hover:-translate-y-0.5"
               >
                 <div>
                   <div className="flex items-center gap-1 mb-1">
-                    <p className="text-gray-400 text-xs font-bold uppercase tracking-wider">Success Rate</p>
+                    <p className="text-gray-400 text-[10px] font-bold uppercase tracking-widest">Success Rate</p>
                     <ChevronRight className="w-3 h-3 text-gray-300" />
                   </div>
-                  <h3 className="text-2xl font-bold text-gray-800">{metrics.successRate.toFixed(1)}%</h3>
-                  <p className="text-xs text-gray-500 mt-1">Conformance</p>
+                  <h3 className="text-2xl font-bold text-gray-800 tracking-tight">{metrics.successRate.toFixed(1)}%</h3>
+                  <p className="text-[10px] text-gray-500 mt-1 font-bold uppercase tracking-wide">Conformance</p>
                 </div>
                 <CircularGauge value={metrics.successRate} color={metrics.successRate >= 90 ? '#22c55e' : metrics.successRate >= 75 ? '#eab308' : '#ef4444'} />
               </div>
     
-              {/* Census Widget */}
               <div 
                 onClick={() => setActiveModal('census')}
-                className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 cursor-pointer hover:shadow-md transition-all hover:-translate-y-0.5"
+                className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 cursor-pointer hover:shadow-md transition-all hover:-translate-y-0.5 group"
               >
                  <div className="flex justify-between items-start">
                    <div>
                       <div className="flex items-center gap-1 mb-1">
-                        <p className="text-gray-400 text-xs font-bold uppercase tracking-wider">Avg Census</p>
+                        <p className="text-gray-400 text-[10px] font-bold uppercase tracking-widest">Avg Census</p>
                         <ChevronRight className="w-3 h-3 text-gray-300" />
                       </div>
-                      <h3 className="text-2xl font-bold text-gray-800">{metrics.avgCensus}</h3>
+                      <h3 className="text-2xl font-bold text-gray-800 tracking-tight">{metrics.avgCensus}</h3>
                    </div>
-                   <div className="bg-indigo-50 p-2 rounded-lg">
+                   <div className="bg-indigo-50 p-2 rounded-lg group-hover:bg-indigo-100 transition-colors">
                      <Users className="w-5 h-5 text-indigo-600" />
                    </div>
                  </div>
                  <div className="mt-3">
-                   <div className="flex justify-between text-xs text-gray-400 mb-1">
-                     <span>Total Load</span>
-                     <span>{metrics.totalCensus}</span>
+                   <div className="flex justify-between text-[10px] text-gray-400 mb-1 font-bold uppercase tracking-wider">
+                     <span>Total Volume</span>
+                     <span className="text-indigo-600">{metrics.totalCensus}</span>
                    </div>
                    <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
                      <div className="h-full bg-indigo-500 rounded-full" style={{ width: '65%' }}></div>
@@ -609,7 +645,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                  </div>
               </div>
     
-              {/* Failure Streak Widget */}
               <div 
                 onClick={() => setActiveModal('streak')}
                 className={`bg-white p-4 rounded-xl shadow-sm border-l-4 ${metrics.failureStreak > 0 ? 'border-red-500' : 'border-green-500'} flex flex-col justify-between cursor-pointer hover:shadow-md transition-all hover:-translate-y-0.5`}
@@ -617,26 +652,25 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                  <div className="flex justify-between items-start">
                    <div>
                      <div className="flex items-center gap-1 mb-1">
-                        <p className="text-gray-400 text-xs font-bold uppercase tracking-wider">Failure Streak</p>
+                        <p className="text-gray-400 text-[10px] font-bold uppercase tracking-widest">Failure Streak</p>
                         <ChevronRight className="w-3 h-3 text-gray-300" />
                       </div>
                      <div className="flex items-baseline gap-1">
-                        <h3 className="text-2xl font-bold text-gray-800">{metrics.failureStreak}</h3>
-                        <span className="text-sm text-gray-500">{aggregationPeriod === 'quarterly' ? 'quarters' : 'months'}</span>
+                        <h3 className="text-2xl font-bold text-gray-800 tracking-tight">{metrics.failureStreak}</h3>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{aggregationPeriod === 'quarterly' ? 'Qtrs' : 'Mos'}</span>
                      </div>
                    </div>
                    {metrics.failureStreak > 0 ? (
                      <AlertCircle className="w-6 h-6 text-red-500" />
                    ) : (
-                     <div className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold uppercase">
+                     <div className="bg-green-100 text-green-700 px-2 py-1 rounded-[4px] text-[10px] font-bold uppercase tracking-wider">
                        Stable
                      </div>
                    )}
                 </div>
-                 <p className="text-xs text-gray-400 mt-2">Consecutive non-conformances</p>
+                 <p className="text-[10px] text-gray-400 mt-2 font-medium">Consecutive non-conformances</p>
               </div>
     
-              {/* Trend Widget */}
               <div 
                 onClick={() => setActiveModal('trend')}
                 className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col justify-between cursor-pointer hover:shadow-md transition-all hover:-translate-y-0.5"
@@ -644,10 +678,10 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                  <div className="flex justify-between items-start">
                     <div>
                       <div className="flex items-center gap-1 mb-1">
-                        <p className="text-gray-400 text-xs font-bold uppercase tracking-wider">{aggregationPeriod === 'quarterly' ? 'QoQ' : 'MoM'} Trend</p>
+                        <p className="text-gray-400 text-[10px] font-bold uppercase tracking-widest">{aggregationPeriod === 'quarterly' ? 'QoQ' : 'MoM'} Trend</p>
                         <ChevronRight className="w-3 h-3 text-gray-300" />
                       </div>
-                      <h3 className={`text-2xl font-bold ${isTrendGood ? 'text-green-600' : 'text-red-600'}`}>
+                      <h3 className={`text-2xl font-bold tracking-tight ${isTrendGood ? 'text-green-600' : 'text-red-600'}`}>
                         {metrics.trend > 0 ? '+' : ''}{metrics.trend.toFixed(2)}%
                       </h3>
                     </div>
@@ -655,84 +689,96 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
                        {isTrendGood ? (
                          <ArrowUpRight className="w-5 h-5 text-green-600" />
                        ) : (
-                         <ArrowDownRight className="w-5 h-5 text-red-600" />
+                         <ArrowDownRight className="text-red-600 w-5 h-5" />
                        )}
                     </div>
                  </div>
-                 <p className="text-xs text-gray-400 mt-2">vs. Previous {aggregationPeriod === 'quarterly' ? 'Quarter' : 'Month'}</p>
+                 <p className="text-[10px] text-gray-400 mt-2 font-bold uppercase tracking-wider">vs. Previous {aggregationPeriod === 'quarterly' ? 'Quarter' : 'Month'}</p>
               </div>
             </div>
           )
       })()}
 
-      {/* Main Chart */}
-      <div className="bg-white p-6 rounded-xl shadow-md border border-gray-100">
-        <h3 className="text-lg font-bold text-osmak-800 mb-4">{selectedSection} {selectedKPI !== 'All' ? `- ${selectedKPI}` : ''} {selectedDept !== 'All' ? `(${selectedDept})` : ''} - Performance Trend ({aggregationPeriod === 'quarterly' ? 'Quarterly' : 'Monthly'})</h3>
-        <div className="h-[400px]">
+      {/* Main Card with Exportable Content */}
+      <div ref={reportRef} className="bg-white p-8 rounded-xl shadow-md border border-gray-100">
+        <div className="flex flex-col lg:flex-row justify-between items-start gap-4 mb-8">
+          <div className="flex-1">
+            <h3 className="text-xl font-bold text-osmak-800 leading-tight">
+              {selectedSection} {selectedKPI !== 'All' ? `- ${selectedKPI}` : ''} {selectedDept !== 'All' ? `(${selectedDept})` : ''} 
+              <span className="block text-sm text-gray-400 font-medium mt-0.5 uppercase tracking-widest">
+                Performance Trend Visualization ({aggregationPeriod})
+              </span>
+            </h3>
+            <div className="mt-2.5 flex items-center gap-3">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-osmak-50 rounded-md border border-osmak-100 text-osmak-700 text-xs font-bold">
+                <Calendar className="w-3.5 h-3.5" />
+                {new Date(dateFrom).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} - {new Date(dateTo).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="h-[420px] mb-8">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={displayedData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-              <CartesianGrid stroke="#f3f4f6" strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke="#f1f5f9" strokeDasharray="4 4" vertical={false} />
               <XAxis 
                 dataKey="month" 
+                tick={{fontSize: 11, fontWeight: 600, fill: '#64748b'}}
+                axisLine={{stroke: '#e2e8f0'}}
                 tickFormatter={(value) => aggregationPeriod === 'quarterly' 
                     ? `${new Date(value).getFullYear()}-Q${Math.floor(new Date(value).getMonth() / 3) + 1}`
                     : new Date(value).toLocaleDateString(undefined, { month: 'short', year: '2-digit' })} 
               />
-              
-              <YAxis yAxisId="left" orientation="left" stroke="#15803d" label={{ value: viewMode === 'percent' ? '% Performance' : 'Time', angle: -90, position: 'insideLeft' }} />
-              
-              <YAxis yAxisId="right" orientation="right" stroke="#6366f1" hide={!showCensus} label={{ value: 'Census', angle: 90, position: 'insideRight' }} />
-              
+              <YAxis yAxisId="left" orientation="left" stroke="#15803d" tick={{fontSize: 11}} axisLine={false} tickLine={false} label={{ value: viewMode === 'percent' ? '% Performance' : 'Time', angle: -90, position: 'insideLeft', style: {textAnchor: 'middle', fill: '#15803d', fontWeight: 700, fontSize: 10} }} />
+              <YAxis yAxisId="right" orientation="right" stroke="#6366f1" hide={!showCensus} tick={{fontSize: 11}} axisLine={false} tickLine={false} label={{ value: 'Census', angle: 90, position: 'insideRight', style: {textAnchor: 'middle', fill: '#6366f1', fontWeight: 700, fontSize: 10} }} />
               <Tooltip content={<CustomTooltip />} />
-              <Legend verticalAlign="top" height={36}/>
-              
+              <Legend verticalAlign="top" height={40} iconType="circle" wrapperStyle={{paddingBottom: '20px', fontSize: '11px', fontWeight: 700}}/>
               <Bar 
                 yAxisId="left" 
                 dataKey={viewMode === 'percent' ? 'actualPct' : 'actualTime'} 
-                name="Actual" 
+                name="Actual Performance" 
                 fill="#22c55e" 
-                barSize={30} 
-                radius={[4, 4, 0, 0]}
+                barSize={32} 
+                radius={[6, 6, 0, 0]}
               />
-              
               <Line 
                 yAxisId="left" 
                 type="monotone" 
                 dataKey={viewMode === 'percent' ? 'targetPct' : 'targetTime'} 
-                name="Target" 
-                stroke="#dc2626" 
-                strokeWidth={2} 
+                name="Performance Target" 
+                stroke="#ef4444" 
+                strokeWidth={3} 
                 dot={false}
-                strokeDasharray="5 5"
+                strokeDasharray="6 6"
               />
-              
               {showCensus && (
                 <Line 
                   yAxisId="right" 
                   type="monotone" 
                   dataKey="census" 
-                  name="Census" 
+                  name="Patient Census" 
                   stroke="#6366f1" 
-                  strokeWidth={2} 
-                  dot={{ r: 4, fill: '#6366f1' }}
+                  strokeWidth={2.5} 
+                  dot={{ r: 5, fill: '#6366f1', strokeWidth: 2, stroke: '#fff' }}
                 />
               )}
             </ComposedChart>
           </ResponsiveContainer>
         </div>
         
-        {/* Interpretation Section */}
-        <div className="mt-6 pt-6 border-t border-gray-100">
-          <div className="flex items-center justify-between mb-3">
-             <h4 className="font-semibold text-gray-700 flex items-center gap-2">
+        {/* Interpretation Section inside the card */}
+        <div className="mt-8 pt-8 border-t-2 border-dashed border-gray-100 bg-gray-50/30 -mx-8 px-8 rounded-b-xl">
+          <div className="flex items-center justify-between mb-4">
+             <h4 className="font-bold text-gray-700 flex items-center gap-2 uppercase tracking-widest text-xs">
                <Sparkles className="w-4 h-4 text-amber-500" />
-               Data Analysis
+               Automated Operational Analysis
              </h4>
           </div>
-          
-          <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 leading-relaxed border border-gray-100">
+          <div className="bg-white rounded-xl p-5 text-sm text-gray-700 leading-relaxed border border-gray-200 shadow-sm relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-1 h-full bg-osmak-500"></div>
             {analysis ? (
-              <p>{analysis}</p>
+              <p className="relative z-10 font-medium italic">{analysis}</p>
             ) : (
               <p className="text-gray-400 italic">No data available for analysis in the selected range.</p>
             )}
@@ -742,23 +788,28 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
 
       {/* METRIC DETAIL MODAL */}
       {activeModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-fade-in">
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
-                  <div className="flex justify-between items-center p-4 border-b border-gray-100 bg-gray-50">
-                      <h2 className="text-lg font-bold text-gray-800">Metric Details</h2>
-                      <button onClick={() => setActiveModal(null)} className="p-1 hover:bg-gray-200 rounded-full transition-colors">
-                          <X className="w-5 h-5 text-gray-500" />
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] p-4 backdrop-blur-sm animate-fade-in">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-gray-100">
+                  <div className="flex justify-between items-center p-5 border-b border-gray-100 bg-gray-50/50">
+                      <div className="flex items-center gap-2.5">
+                          <div className="bg-osmak-100 p-2 rounded-lg">
+                             <Activity className="w-5 h-5 text-osmak-700" />
+                          </div>
+                          <h2 className="text-lg font-bold text-gray-800 tracking-tight">Data Intelligence Breakdown</h2>
+                      </div>
+                      <button onClick={() => setActiveModal(null)} className="p-1.5 hover:bg-gray-200 rounded-full transition-all text-gray-400 hover:text-gray-600">
+                          <X className="w-5 h-5" />
                       </button>
                   </div>
-                  <div className="p-6">
+                  <div className="p-8">
                       {renderModalContent()}
                   </div>
-                  <div className="bg-gray-50 p-4 text-right border-t border-gray-100">
+                  <div className="bg-gray-50 p-4 px-6 text-right border-t border-gray-100 flex justify-end">
                       <button 
                         onClick={() => setActiveModal(null)}
-                        className="px-4 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        className="px-6 py-2 bg-white border border-gray-300 rounded-lg text-sm font-bold text-gray-700 hover:bg-gray-50 shadow-sm transition-all"
                       >
-                          Close
+                          Dismiss
                       </button>
                   </div>
               </div>
@@ -768,7 +819,6 @@ const KPITrend: React.FC<KPITrendProps> = ({ records }) => {
   );
 };
 
-// Simple Gauge Component
 const CircularGauge = ({ value, color }: { value: number; color: string }) => {
     const radius = 30;
     const stroke = 5;
